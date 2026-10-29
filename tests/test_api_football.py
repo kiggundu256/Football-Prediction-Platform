@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 import requests
-from api_football import ApiFootballError, fetch_fixtures
+from api_football import ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures
 
 
 class ApiFootballTests(unittest.TestCase):
@@ -34,6 +34,18 @@ class ApiFootballTests(unittest.TestCase):
     def test_network_error_does_not_leak_request_details(self, get):
         with self.assertRaisesRegex(ApiFootballError, "Could not reach"):
             fetch_fixtures(api_key="test-key")
+
+
+    @patch("api_football.requests.get")
+    def test_fetches_recent_team_fixtures(self, get):
+        response = Mock()
+        response.ok = True
+        response.status_code = 200
+        response.json.return_value = {"response": [{"fixture": {"id": 123}}], "errors": []}
+        get.return_value = response
+        result = fetch_recent_team_fixtures(10, api_key="test-key", last=5)
+        self.assertEqual(result[0]["fixture"]["id"], 123)
+        self.assertEqual(get.call_args.kwargs["params"], {"team": 10, "last": 5})
 
 
 if __name__ == "__main__":
