@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QSpinBox, QTabWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget
 )
-from api_football import ApiFootballError, fetch_fixtures
+from api_football import ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures
 from prediction_engine import predict_markets
 
 APP_NAME = "Football Prediction Platform"
@@ -132,9 +132,12 @@ class MainWindow(QMainWindow):
         self.fixture_date.setDisplayFormat("yyyy-MM-dd")
         buttons.addWidget(self.fixture_date)
         load = QPushButton("Load Fixtures"); load.clicked.connect(self.load_live_fixtures)
-        buttons.addWidget(load); buttons.addStretch(); box.addLayout(buttons)
+        buttons.addWidget(load)
+        analyze = QPushButton("Analyze Selected Match"); analyze.clicked.connect(self.analyze_selected_fixture)
+        buttons.addWidget(analyze); buttons.addStretch(); box.addLayout(buttons)
         self.api_message = QLabel("API not tested yet. Set your key, then load fixtures.")
         self.api_message.setWordWrap(True); box.addWidget(self.api_message)
+        self.live_fixtures = []
         self.live_table = QTableWidget(0, 5)
         self.live_table.setHorizontalHeaderLabels(["Kick-off (provider time)", "Competition", "Home", "Away", "Status"])
         self.live_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -227,6 +230,7 @@ class MainWindow(QMainWindow):
             return
         finally:
             QApplication.restoreOverrideCursor()
+        self.live_fixtures = fixtures
         self.live_table.setRowCount(len(fixtures))
         for i, item in enumerate(fixtures):
             fixture = item.get("fixture") or {}
@@ -243,6 +247,83 @@ class MainWindow(QMainWindow):
         self.api_message.setText(f"Loaded {len(fixtures)} fixtures for {date}. Provider coverage and completeness depend on your plan.")
         self.fixtures_card.value_label.setText(str(len(fixtures)))
         self.fixtures_card.title_label.setText("LIVE FIXTURES") if hasattr(self.fixtures_card, "title_label") else None
+
+
+    def analyze_selected_fixture(self):
+        row = self.live_table.currentRow()
+        if row < 0 or row >= len(self.live_fixtures):
+            QMessageBox.information(self, "Select a match", "Click a fixture row first, then choose Analyze Selected Match.")
+            return
+        item = self.live_fixtures[row]
+        teams = item.get("teams") or {}
+        home = teams.get("home") or {}
+        away = teams.get("away") or {}
+        home_id, away_id = home.get("id"), away.get("id")
+        home_name, away_name = home.get("name", "Home"), away.get("name", "Away")
+        key = self.get_api_key()
+        if not key:
+            QMessageBox.information(self, "API key needed", "Set your API key before analyzing a match.")
+            return
+        self.api_message.setText(f"Fetching recent form for {home_name} and {away_name}…")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            home_recent = fetch_recent_team_fixtures(home_id, api_key=key, last=5)
+            away_recent = fetch_recent_team_fixtures(away_id, api_key=key, last=5)
+        except ApiFootballError as exc:
+            QMessageBox.warning(self, "Form data unavailable", str(exc))
+            self.api_message.setText(str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        def team_rates(fixtures, team_id):
+            scored, conceded = [], []
+            for match in fixtures:
+                goals = match.get("goals") or {}
+                hteam = (match.get("teams") or {}).get("home") or {}
+                ateam = (match.get("teams") or {}).get("away") or {}
+                hg, ag = goals.get("home"), goals.get("away")
+                if hg is None or ag is None:
+                    continue
+                if hteam.get("id") == team_id:
+                    scored.append(float(hg)); conceded.append(float(ag))
+                elif ateam.get("id") == team_id:
+                    scored.append(float(ag)); conceded.append(float(hg))
+            if not scored:
+                return None
+            return sum(scored) / len(scored), sum(conceded) / len(conceded), len(scored)
+
+        hr = team_rates(home_recent, home_id)
+        ar = team_rates(away_recent, away_id)
+        if not hr or not ar:
+            QMessageBox.information(
+                self, "Not enough results",
+                "The provider did not return enough completed recent matches for both teams. "
+                "Try another fixture or date."
+            )
+            self.api_message.setText("Not enough completed recent results to calculate a form-based estimate.")
+            return
+        home_xg = max(0.05, (hr[0] + ar[1]) / 2)
+        away_xg = max(0.05, (ar[0] + hr[1]) / 2)
+        markets = predict_markets(home_xg, away_xg)
+        scores = ", ".join(f"{h}-{a} ({p:.1%})" for h, a, p in markets["top_scores"][:5])
+        report = (
+            f"{home_name} vs {away_name}\n\n"
+            f"Recent completed matches used: {home_name} {hr[2]}, {away_name} {ar[2]} (up to 5 each)\n"
+            f"Average goals scored/conceded — {home_name}: {hr[0]:.2f}/{hr[1]:.2f}; "
+            f"{away_name}: {ar[0]:.2f}/{ar[1]:.2f}\n\n"
+            f"Form-based estimated goals: {home_name} {home_xg:.2f} — {away_xg:.2f} {away_name}\n"
+            f"1X2: Home {markets['home_win']:.1%} | Draw {markets['draw']:.1%} | Away {markets['away_win']:.1%}\n"
+            f"Over 1.5 {markets['over']['1.5']:.1%} | Over 2.5 {markets['over']['2.5']:.1%} | "
+            f"Over 3.5 {markets['over']['3.5']:.1%}\n"
+            f"BTTS Yes {markets['btts_yes']:.1%} | BTTS No {markets['btts_no']:.1%}\n"
+            f"Top scorelines: {scores}\n\n"
+            "EARLY BASELINE: uses recent goals only, not opponent strength, home advantage, injuries, lineups, "
+            "corners or referee/weather data. Probabilities are experimental and are not validated betting advice."
+        )
+        self.api_message.setText(f"Analysis ready for {home_name} vs {away_name}. Review the report.")
+        QMessageBox.information(self, "Early form-based analysis", report)
+
 
     def analysis(self):
         page = QWidget(); box = QVBoxLayout(page); form = QFormLayout()
