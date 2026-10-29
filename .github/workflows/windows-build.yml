@@ -24,7 +24,7 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -s tests -v
       - name: Build Windows executable
-        run: python -m PyInstaller --noconfirm --clean --windowed --onefile --name FootballPredictionPlatform app.py
+        run: python -m PyInstaller --noconfirm --clean --windowed --onefile --collect-all keyring --hidden-import keyring.backends.Windows --name FootballPredictionPlatform app.py
       - name: Upload Windows app
         uses: actions/upload-artifact@v4
         with:
