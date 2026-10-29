@@ -9,9 +9,10 @@ from pathlib import Path
 import keyring
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDateEdit, QFormLayout, QFrame, QGridLayout,
-    QHBoxLayout, QInputDialog, QLabel, QMainWindow, QMessageBox, QPushButton,
-    QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+    QApplication, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFormLayout,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+    QMessageBox, QPushButton, QSpinBox, QTabWidget, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget
 )
 from api_football import ApiFootballError, fetch_fixtures
 from prediction_engine import predict_markets
@@ -149,23 +150,58 @@ class MainWindow(QMainWindow):
             return None
 
     def set_api_key(self):
-        key, ok = QInputDialog.getText(self, "API-Football key",
-            "Paste your regenerated API key. It will be stored in Windows Credential Manager:",
-            QInputDialog.EchoMode.Password)
-        if not ok:
+        # Use an explicit modal dialog instead of the static QInputDialog helper.
+        # This is more reliable in the packaged Windows executable.
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Set API-Football key")
+        dialog.setModal(True)
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setMinimumWidth(460)
+        layout = QVBoxLayout(dialog)
+        prompt = QLabel(
+            "Paste your regenerated API-Football key below. "
+            "The key will be saved in Windows Credential Manager."
+        )
+        prompt.setWordWrap(True)
+        layout.addWidget(prompt)
+        entry = QLineEdit(dialog)
+        entry.setEchoMode(QLineEdit.EchoMode.Password)
+        entry.setPlaceholderText("Paste API key here")
+        existing = self.get_api_key()
+        if existing:
+            entry.setPlaceholderText("A key is already saved; enter a replacement")
+        layout.addWidget(entry)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.adjustSize()
+        dialog.raise_()
+        dialog.activateWindow()
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        key = key.strip()
+        key = entry.text().strip()
         if not key:
-            QMessageBox.warning(self, "Missing key", "No key was entered.")
+            QMessageBox.warning(self, "Missing key", "No key was entered. Please paste your API key and press Save.")
             return
         try:
             keyring.set_password(KEYRING_SERVICE, "api_key", key)
+            saved = keyring.get_password(KEYRING_SERVICE, "api_key")
+            if saved != key:
+                raise RuntimeError("Credential could not be verified after saving")
         except Exception:
-            QMessageBox.critical(self, "Secure storage unavailable",
-                "Windows Credential Manager could not store the key. No key was saved. Check Windows sign-in and try again.")
+            QMessageBox.critical(
+                self, "Secure storage unavailable",
+                "Windows could not save the API key securely. No key was confirmed as saved. "
+                "Please check that you are signed in to Windows and try again."
+            )
             return
         self.api_message.setText("API key saved securely. Click Load Fixtures to test the connection.")
         self.update_api_status()
+        QMessageBox.information(self, "API key saved", "Your API key was saved. Now click Load Fixtures.")
 
     def update_api_status(self):
         if hasattr(self, "api_card"):
