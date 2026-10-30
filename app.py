@@ -315,7 +315,7 @@ class MainWindow(QMainWindow):
         scores = ", ".join(f"{h}-{a} ({p:.1%})" for h, a, p in markets["top_scores"][:5])
         report = (
             f"{home_name} vs {away_name}\n\n"
-            f"Recent completed matches used: {home_name} {hr[2]}, {away_name} {ar[2]} (up to 5 each)\n"
+            f"Historical completed matches used (Free-plan seasons 2022–2024): {home_name} {hr[2]}, {away_name} {ar[2]} (up to 5 each)\n"
             f"Average goals scored/conceded — {home_name}: {hr[0]:.2f}/{hr[1]:.2f}; "
             f"{away_name}: {ar[0]:.2f}/{ar[1]:.2f}\n\n"
             f"Form-based estimated goals: {home_name} {home_xg:.2f} — {away_xg:.2f} {away_name}\n"
@@ -324,7 +324,7 @@ class MainWindow(QMainWindow):
             f"Over 3.5 {markets['over']['3.5']:.1%}\n"
             f"BTTS Yes {markets['btts_yes']:.1%} | BTTS No {markets['btts_no']:.1%}\n"
             f"Top scorelines: {scores}\n\n"
-            "EARLY BASELINE: uses recent goals only, not opponent strength, home advantage, injuries, lineups, "
+            "DATA LIMITATION: Free-plan historical seasons 2022–2024 are used; this is not current-season form.\n""EARLY BASELINE: uses historical goals only, not opponent strength, home advantage, injuries, lineups, "
             "corners or referee/weather data. Probabilities are experimental and are not validated betting advice."
         )
         self.api_message.setText(f"Analysis ready for {home_name} vs {away_name}. Review the report.")
