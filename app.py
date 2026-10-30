@@ -499,8 +499,10 @@ class MainWindow(QMainWindow):
             f"{away_xg:.2f} {away_name}\\n\\n"
             "PREDICTED MARKETS\\n"
             f"1X2: Home {markets['home_win']:.1%} | Draw {markets['draw']:.1%} | Away {markets['away_win']:.1%}\\n"
-            f"Over 1.5 {markets['over']['1.5']:.1%} | Over 2.5 {markets['over']['2.5']:.1%} | "
-            f"Over 3.5 {markets['over']['3.5']:.1%}\\n"
+            "TOTAL GOALS — Over / Under\\n"
+            f"1.5: Over {markets['over']['1.5']:.1%} | Under {1 - markets['over']['1.5']:.1%}\\n"
+            f"2.5: Over {markets['over']['2.5']:.1%} | Under {1 - markets['over']['2.5']:.1%}\\n"
+            f"3.5: Over {markets['over']['3.5']:.1%} | Under {1 - markets['over']['3.5']:.1%}\\n"
             f"BTTS Yes {markets['btts_yes']:.1%} | BTTS No {markets['btts_no']:.1%}\\n"
             f"Most likely scorelines: {scores}\\n\\n"
             + "\\n".join(explanation)
@@ -662,7 +664,10 @@ class MainWindow(QMainWindow):
         self.output.setText("\\n".join([
             f"{f[1]} vs {f[2]}", "",
             f"1X2: Home {m['home_win']:.1%} | Draw {m['draw']:.1%} | Away {m['away_win']:.1%}",
-            f"Over 1.5: {m['over']['1.5']:.1%} | Over 2.5: {m['over']['2.5']:.1%} | Over 3.5: {m['over']['3.5']:.1%}",
+            "TOTAL GOALS — Over / Under:",
+            f"1.5: Over {m['over']['1.5']:.1%} | Under {1 - m['over']['1.5']:.1%}",
+            f"2.5: Over {m['over']['2.5']:.1%} | Under {1 - m['over']['2.5']:.1%}",
+            f"3.5: Over {m['over']['3.5']:.1%} | Under {1 - m['over']['3.5']:.1%}",
             f"BTTS Yes: {m['btts_yes']:.1%} | BTTS No: {m['btts_no']:.1%}",
             f"Most likely scorelines: {scores}", "",
             "Corners are not modelled yet. These are illustrative outputs from manual xG inputs, not real match forecasts or betting advice."
