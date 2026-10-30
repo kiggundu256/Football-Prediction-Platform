@@ -52,17 +52,17 @@ class ApiFootballTests(unittest.TestCase):
         response.ok = True
         response.status_code = 200
         response.json.return_value = {"response": [
-            {"fixture": {"id": 123, "date": "2026-10-20T18:00:00+00:00", "status": {"short": "FT"}}},
-            {"fixture": {"id": 124, "date": "2026-10-25T18:00:00+00:00", "status": {"short": "NS"}}},
-            {"fixture": {"id": 122, "date": "2026-10-18T18:00:00+00:00", "status": {"short": "FT"}}},
+            {"fixture": {"id": 123, "date": "2024-10-20T18:00:00+00:00", "status": {"short": "FT"}}},
+            {"fixture": {"id": 124, "date": "2024-10-25T18:00:00+00:00", "status": {"short": "NS"}}},
+            {"fixture": {"id": 122, "date": "2024-10-18T18:00:00+00:00", "status": {"short": "FT"}}},
         ], "errors": []}
         get.return_value = response
         result = fetch_recent_team_fixtures(10, api_key="test-key", last=5, before_date="2026-10-30", season=2026)
         self.assertEqual([m["fixture"]["id"] for m in result], [123, 122])
         params = get.call_args.kwargs["params"]
         self.assertEqual(params["team"], 10)
-        self.assertEqual(params["season"], 2026)
-        self.assertEqual(params["to"], "2026-10-29")
+        self.assertEqual(params["season"], 2024)
+        self.assertNotIn("from", params)\n        self.assertNotIn("to", params)
         self.assertNotIn("last", params)
 
 
