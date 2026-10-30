@@ -62,7 +62,8 @@ class ApiFootballTests(unittest.TestCase):
         params = get.call_args.kwargs["params"]
         self.assertEqual(params["team"], 10)
         self.assertEqual(params["season"], 2024)
-        self.assertNotIn("from", params)\n        self.assertNotIn("to", params)
+        self.assertNotIn("from", params)
+        self.assertNotIn("to", params)
         self.assertNotIn("last", params)
 
 
