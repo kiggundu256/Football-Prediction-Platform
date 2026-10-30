@@ -23,6 +23,7 @@ from head_to_head import summarize_head_to_head
 from ui_theme import APP_STYLESHEET
 from settlement import settle_markets
 from performance_metrics import summarize_performance
+from fixture_view import filter_fixtures, competition_options, fixture_status_group
 
 APP_NAME = "Football Prediction Platform"
 KEYRING_SERVICE = "FootballPredictionPlatform"
@@ -189,6 +190,13 @@ class Store:
                 home_xg, away_xg, result_status, actual_home_goals, actual_away_goals,
                 outcomes_json FROM prediction_runs ORDER BY id DESC LIMIT 200""").fetchall()
 
+    def predicted_fixture_ids(self):
+        """Return provider fixture IDs that already have a saved real prediction."""
+        with self.connect() as db:
+            rows = db.execute("""SELECT DISTINCT fixture_id FROM prediction_runs
+                WHERE is_demo = 0 AND fixture_id IS NOT NULL""").fetchall()
+        return {int(row[0]) for row in rows if row[0] is not None}
+
     def pending_predictions(self):
         with self.connect() as db:
             return db.execute("""SELECT id, fixture_id, markets_json FROM prediction_runs
@@ -327,31 +335,157 @@ class MainWindow(QMainWindow):
 
     def live_fixtures_page(self):
         page = QWidget(); box = QVBoxLayout(page)
-        intro = QLabel("Fetch real fixtures from API-Football. Your API key is stored in Windows Credential Manager, not in the app source code.")
+        intro = QLabel("Browse provider fixtures, narrow the list and open a match for analysis. Your API key remains in Windows Credential Manager.")
         intro.setWordWrap(True); box.addWidget(intro)
-        buttons = QHBoxLayout()
-        self.key_button = QPushButton("Set / Replace API Key"); self.key_button.clicked.connect(self.set_api_key)
-        buttons.addWidget(self.key_button)
-        buttons.addWidget(QLabel("Fixture date:"))
-        self.fixture_date = QDateEdit(QDate.currentDate()); self.fixture_date.setCalendarPopup(True)
+
+        controls = QHBoxLayout()
+        self.key_button = QPushButton("Set / Replace API Key")
+        self.key_button.clicked.connect(self.set_api_key)
+        controls.addWidget(self.key_button)
+        controls.addWidget(QLabel("Fixture date:"))
+        self.fixture_date = QDateEdit(QDate.currentDate())
+        self.fixture_date.setCalendarPopup(True)
         self.fixture_date.setDisplayFormat("yyyy-MM-dd")
-        buttons.addWidget(self.fixture_date)
-        load = QPushButton("Load Fixtures"); load.clicked.connect(self.load_live_fixtures)
-        buttons.addWidget(load)
-        analyze = QPushButton("Analyze Selected Match"); analyze.clicked.connect(self.analyze_selected_fixture)
-        buttons.addWidget(analyze); buttons.addStretch(); box.addLayout(buttons)
+        controls.addWidget(self.fixture_date)
+        self.load_fixtures_button = QPushButton("Load Fixtures")
+        self.load_fixtures_button.clicked.connect(self.load_live_fixtures)
+        controls.addWidget(self.load_fixtures_button)
+        self.analyze_fixture_button = QPushButton("Analyze Selected Match")
+        self.analyze_fixture_button.clicked.connect(self.analyze_selected_fixture)
+        controls.addWidget(self.analyze_fixture_button)
+        controls.addStretch()
+        box.addLayout(controls)
+
+        filters = QHBoxLayout()
+        self.fixture_search = QLineEdit()
+        self.fixture_search.setPlaceholderText("Search team, competition or country…")
+        self.fixture_search.textChanged.connect(self.apply_fixture_filters)
+        filters.addWidget(self.fixture_search, 2)
+        self.fixture_league_filter = QComboBox()
+        self.fixture_league_filter.addItem("All competitions")
+        self.fixture_league_filter.currentTextChanged.connect(self.apply_fixture_filters)
+        filters.addWidget(self.fixture_league_filter, 1)
+        self.fixture_status_filter = QComboBox()
+        self.fixture_status_filter.addItems(["All statuses", "Scheduled", "Live", "Finished"])
+        self.fixture_status_filter.currentTextChanged.connect(self.apply_fixture_filters)
+        filters.addWidget(self.fixture_status_filter, 1)
+        clear_filters = QPushButton("Clear filters")
+        clear_filters.clicked.connect(self.clear_fixture_filters)
+        filters.addWidget(clear_filters)
+        box.addLayout(filters)
+
+        self.fixture_summary = QLabel("No fixtures loaded yet.")
+        self.fixture_summary.setStyleSheet("color:#94A9C7;font-weight:600;padding:4px 1px")
+        box.addWidget(self.fixture_summary)
         self.api_message = QLabel("API not tested yet. Set your key, then load fixtures.")
-        self.api_message.setWordWrap(True); box.addWidget(self.api_message)
+        self.api_message.setWordWrap(True)
+        box.addWidget(self.api_message)
+
         self.live_fixtures = []
-        self.live_table = QTableWidget(0, 5)
-        self.live_table.setHorizontalHeaderLabels(["Kick-off (provider time)", "Competition", "Home", "Away", "Status"])
+        self.visible_fixtures = []
+        self.live_table = QTableWidget(0, 7)
+        self.live_table.setHorizontalHeaderLabels([
+            "Kick-off (provider time)", "Competition", "Home team", "Away team",
+            "Venue", "Status", "Prediction"
+        ])
         self.live_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.live_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
-        self.live_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
-        enable_table_copy(self.live_table)
+        self.live_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.live_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.live_table.setAlternatingRowColors(True)
+        self.live_table.setSortingEnabled(False)
+        self.live_table.verticalHeader().setVisible(False)
         self.live_table.horizontalHeader().setStretchLastSection(True)
+        self.live_table.itemSelectionChanged.connect(self.update_fixture_details)
+        enable_table_copy(self.live_table)
         box.addWidget(self.live_table, 1)
+
+        self.fixture_details = QLabel("Select a fixture to see its details.")
+        self.fixture_details.setWordWrap(True)
+        self.fixture_details.setStyleSheet(
+            "background:#111D30;border:1px solid #26364D;border-radius:8px;"
+            "padding:10px;color:#D7E3F5"
+        )
+        box.addWidget(self.fixture_details)
         return page
+
+    def clear_fixture_filters(self):
+        self.fixture_search.clear()
+        self.fixture_league_filter.setCurrentIndex(0)
+        self.fixture_status_filter.setCurrentIndex(0)
+        self.apply_fixture_filters()
+
+    def apply_fixture_filters(self):
+        if not hasattr(self, "live_table"):
+            return
+        query = self.fixture_search.text() if hasattr(self, "fixture_search") else ""
+        league = self.fixture_league_filter.currentText() if hasattr(self, "fixture_league_filter") else "All competitions"
+        status = self.fixture_status_filter.currentText() if hasattr(self, "fixture_status_filter") else "All statuses"
+        visible = filter_fixtures(self.live_fixtures, query=query, league=league, status=status)
+        predicted_ids = self.store.predicted_fixture_ids()
+        self.visible_fixtures = visible
+        self.live_table.setRowCount(len(visible))
+        for row, item in enumerate(visible):
+            fixture = item.get("fixture") or {}
+            teams = item.get("teams") or {}
+            league_data = item.get("league") or {}
+            home = teams.get("home") or {}
+            away = teams.get("away") or {}
+            venue = fixture.get("venue") or {}
+            fixture_id = fixture.get("id")
+            kickoff = (fixture.get("date") or "").replace("T", " ")[:16]
+            competition = league_data.get("name", "Unknown")
+            country = league_data.get("country")
+            if country:
+                competition = f"{competition} ({country})"
+            status_data = fixture.get("status") or {}
+            status_label = status_data.get("long") or status_data.get("short") or "Unknown"
+            status_short = status_data.get("short") or ""
+            prediction = "Saved" if fixture_id in predicted_ids else "Not analyzed"
+            values = [
+                kickoff, competition, home.get("name", "Unknown"),
+                away.get("name", "Unknown"), venue.get("name") or "—",
+                status_label, prediction
+            ]
+            for column, value in enumerate(values):
+                cell = QTableWidgetItem(str(value))
+                if column == 5:
+                    cell.setToolTip(f"Provider status: {status_short or 'not supplied'}")
+                self.live_table.setItem(row, column, cell)
+        total = len(self.live_fixtures)
+        shown = len(visible)
+        self.fixture_summary.setText(
+            f"Showing {shown} of {total} fixtures  •  "
+            f"{sum(1 for f in visible if fixture_status_group(f) == 'Live')} live  •  "
+            f"{sum(1 for f in visible if fixture_status_group(f) == 'Scheduled')} scheduled  •  "
+            f"{sum(1 for f in visible if fixture_status_group(f) == 'Finished')} finished"
+        )
+        self.update_fixture_details()
+
+    def update_fixture_details(self):
+        if not hasattr(self, "fixture_details"):
+            return
+        row = self.live_table.currentRow()
+        if row < 0 or row >= len(self.visible_fixtures):
+            self.fixture_details.setText("Select a fixture to see its details.")
+            return
+        item = self.visible_fixtures[row]
+        fixture = item.get("fixture") or {}
+        league = item.get("league") or {}
+        teams = item.get("teams") or {}
+        home = teams.get("home") or {}
+        away = teams.get("away") or {}
+        venue = fixture.get("venue") or {}
+        status = fixture.get("status") or {}
+        self.fixture_details.setText(
+            f"<b>{home.get('name', 'Home')} vs {away.get('name', 'Away')}</b>  •  "
+            f"{league.get('name', 'Unknown')}<br>"
+            f"Kick-off: {(fixture.get('date') or 'Not supplied').replace('T', ' ')[:19]}  |  "
+            f"Status: {status.get('long') or status.get('short') or 'Unknown'}<br>"
+            f"Venue: {venue.get('name') or 'Not supplied'}"
+            f"{(' — ' + venue.get('city')) if venue.get('city') else ''}  |  "
+            f"Round: {league.get('round') or 'Not supplied'}  |  "
+            f"Referee: {fixture.get('referee') or 'Not supplied'}"
+        )
 
     def get_api_key(self):
         try:
@@ -423,7 +557,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "API key needed", "Click Set / Replace API Key first.")
             return
         date = self.fixture_date.date().toString("yyyy-MM-dd")
-        self.api_message.setText("Loading fixtures…")
+        self.api_message.setText(f"Loading fixtures for {date}…")
+        self.load_fixtures_button.setEnabled(False)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             fixtures = fetch_fixtures(api_key=key, date=date)
@@ -437,30 +572,26 @@ class MainWindow(QMainWindow):
             return
         finally:
             QApplication.restoreOverrideCursor()
+            self.load_fixtures_button.setEnabled(True)
         self.live_fixtures = fixtures
-        self.live_table.setRowCount(len(fixtures))
-        for i, item in enumerate(fixtures):
-            fixture = item.get("fixture") or {}
-            teams = item.get("teams") or {}
-            league = item.get("league") or {}
-            home = (teams.get("home") or {}).get("name", "Unknown")
-            away = (teams.get("away") or {}).get("name", "Unknown")
-            kickoff = fixture.get("date", "")
-            competition = league.get("name", "Unknown")
-            status = ((fixture.get("status") or {}).get("short", "Unknown"))
-            values = [kickoff, competition, home, away, status]
-            for j, value in enumerate(values):
-                self.live_table.setItem(i, j, QTableWidgetItem(str(value)))
-        self.api_message.setText(f"Loaded {len(fixtures)} fixtures for {date}. Provider coverage and completeness depend on your plan.")
+        self.fixture_league_filter.blockSignals(True)
+        self.fixture_league_filter.clear()
+        self.fixture_league_filter.addItems(competition_options(fixtures))
+        self.fixture_league_filter.blockSignals(False)
+        self.apply_fixture_filters()
+        self.api_message.setText(
+            f"Loaded {len(fixtures)} fixtures for {date}. "
+            "Provider coverage and completeness depend on your API plan."
+        )
         self.refresh_dashboard()
 
 
     def analyze_selected_fixture(self):
         row = self.live_table.currentRow()
-        if row < 0 or row >= len(self.live_fixtures):
-            QMessageBox.information(self, "Select a match", "Click a fixture row first, then choose Analyze Selected Match.")
+        if row < 0 or row >= len(self.visible_fixtures):
+            QMessageBox.information(self, "Select a match", "Select a fixture row first, then choose Analyze Selected Match.")
             return
-        item = self.live_fixtures[row]
+        item = self.visible_fixtures[row]
         teams = item.get("teams") or {}
         home = teams.get("home") or {}
         away = teams.get("away") or {}
