@@ -31,7 +31,7 @@ def fetch_fixtures(api_key=None, date=None, league=None, season=None, timeout=20
     if season is not None:
         params["season"] = season
     try:
-        response = requests.get(
+        response = _tracked_get(
             f"{BASE_URL}/fixtures",
             headers={"x-apisports-key": key},
             params=params,
@@ -88,7 +88,7 @@ def fetch_recent_team_fixtures(team_id, api_key=None, last=5, before_date=None, 
     for year in seasons_to_try:
         params = {"team": int(team_id), "season": year}
         try:
-            response = requests.get(
+            response = _tracked_get(
                 f"{BASE_URL}/fixtures",
                 headers={"x-apisports-key": key},
                 params=params,
@@ -148,7 +148,7 @@ def fetch_fixture_corner_statistics(fixture_id, api_key=None, timeout=20):
     if not fixture_id:
         raise ApiFootballError("A valid fixture ID is required.")
     try:
-        response = requests.get(
+        response = _tracked_get(
             f"{BASE_URL}/fixtures/statistics",
             headers={"x-apisports-key": key},
             params={"fixture": int(fixture_id), "type": "Corner Kicks"},
@@ -197,7 +197,7 @@ def fetch_fixture_by_id(fixture_id, api_key=None, timeout=20):
     if not fixture_id:
         raise ApiFootballError("A valid fixture ID is required.")
     try:
-        response = requests.get(
+        response = _tracked_get(
             f"{BASE_URL}/fixtures",
             headers={"x-apisports-key": key},
             params={"id": int(fixture_id)},
@@ -238,7 +238,7 @@ def fetch_head_to_head_fixtures(home_team_id, away_team_id, api_key=None, before
     seen = set()
     for year in (2024, 2023, 2022):
         try:
-            response = requests.get(
+            response = _tracked_get(
                 f"{BASE_URL}/fixtures/headtohead",
                 headers={"x-apisports-key": key},
                 params={"h2h": f"{int(home_team_id)}-{int(away_team_id)}", "season": year},
