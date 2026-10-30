@@ -59,7 +59,8 @@ class ApiFootballTests(unittest.TestCase):
         get.return_value = response
         result = fetch_recent_team_fixtures(10, api_key="test-key", last=5, before_date="2026-10-30", season=2026)
         self.assertEqual([m["fixture"]["id"] for m in result], [123, 122])
-        params = get.call_args.kwargs["params"]
+        self.assertGreaterEqual(get.call_count, 1)
+        params = get.call_args_list[0].kwargs["params"]
         self.assertEqual(params["team"], 10)
         self.assertEqual(params["season"], 2024)
         self.assertNotIn("from", params)
