@@ -539,6 +539,34 @@ class MainWindow(QMainWindow):
         h2h_heading = QLabel(f"HEAD-TO-HEAD • {len(h2h_rows)} previous meetings")
         h2h_heading.setStyleSheet("font-size:16px;font-weight:700;color:#168BFF")
         layout.addWidget(h2h_heading)
+        if h2h_rows:
+            home_wins = draws = away_wins = total_goals = over_15 = over_25 = over_35 = btts = 0
+            for record in h2h_rows:
+                _fid, _date, _competition, historical_home, historical_away, hg, ag = record
+                if hg is None or ag is None:
+                    continue
+                home_score, away_score = (hg, ag) if historical_home == home_name else (ag, hg)
+                home_wins += home_score > away_score
+                draws += home_score == away_score
+                away_wins += home_score < away_score
+                goals_total = home_score + away_score
+                total_goals += goals_total
+                over_15 += goals_total >= 2
+                over_25 += goals_total >= 3
+                over_35 += goals_total >= 4
+                btts += home_score > 0 and away_score > 0
+            count = len(h2h_rows)
+            stats = QLabel(
+                f"Record: {home_name} {home_wins} wins • {draws} draws • "
+                f"{away_name} {away_wins} wins    |    "
+                f"Average goals: {total_goals / count:.2f}    |    "
+                f"Over 1.5: {over_15 / count:.0%}    |    "
+                f"Over 2.5: {over_25 / count:.0%}    |    "
+                f"Over 3.5: {over_35 / count:.0%}    |    BTTS: {btts / count:.0%}"
+            )
+            stats.setWordWrap(True)
+            stats.setStyleSheet("background:#16243A;padding:10px;border:1px solid #26364D;border-radius:7px")
+            layout.addWidget(stats)
         h2h_table = QTableWidget(len(h2h_rows), 5)
         h2h_table.setHorizontalHeaderLabels(["Date", "Competition", "Home Team", "Score", "Away Team"])
         h2h_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
