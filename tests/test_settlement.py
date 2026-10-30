@@ -13,7 +13,7 @@ class SettlementTests(unittest.TestCase):
         self.assertEqual(result["graded"], 5)
         self.assertEqual(result["correct"], 5)
         self.assertTrue(result["markets"]["1X2"]["correct"])
-        self.assertFalse(result["markets"]["Goals 3.5"]["correct"])
+        self.assertTrue(result["markets"]["Goals 3.5"]["correct"])
 
     def test_draw_and_btts_no(self):
         markets = {
