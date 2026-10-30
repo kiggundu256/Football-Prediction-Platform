@@ -18,9 +18,10 @@ from PySide6.QtWidgets import (
 from api_football import ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures
 from prediction_engine import predict_markets
 from analysis_explainer import team_profile, build_analysis_explanation
-from api_football import fetch_head_to_head_fixtures
+from api_football import fetch_head_to_head_fixtures, fetch_fixture_by_id
 from head_to_head import summarize_head_to_head
 from ui_theme import APP_STYLESHEET
+from settlement import settle_markets
 
 APP_NAME = "Football Prediction Platform"
 KEYRING_SERVICE = "FootballPredictionPlatform"
@@ -73,6 +74,23 @@ class Store:
                 FOREIGN KEY(prediction_run_id) REFERENCES prediction_runs(id))""")
             db.execute("""CREATE INDEX IF NOT EXISTS idx_h2h_prediction
                 ON prediction_head_to_head(prediction_run_id, match_date)""")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(prediction_runs)").fetchall()}
+            migrations = {
+                "fixture_id": "INTEGER",
+                "match_date": "TEXT",
+                "result_status": "TEXT NOT NULL DEFAULT 'unlinked'",
+                "actual_home_goals": "INTEGER",
+                "actual_away_goals": "INTEGER",
+                "settled_at_utc": "TEXT",
+                "outcomes_json": "TEXT",
+            }
+            for column, definition in migrations.items():
+                if column not in columns:
+                    db.execute(f"ALTER TABLE prediction_runs ADD COLUMN {column} {definition}")
+            db.execute("""UPDATE prediction_runs SET result_status =
+                CASE WHEN is_demo = 1 THEN 'demo' ELSE 'unlinked' END
+                WHERE result_status = 'unlinked'""")
+
 
     def connect(self):
         return sqlite3.connect(self.path)
@@ -89,11 +107,12 @@ class Store:
         """Persist a real fixture analysis and the exact historical matches behind it."""
         with self.connect() as db:
             cursor = db.execute("""INSERT INTO prediction_runs
-                (created_at_utc, competition, home_team, away_team, home_xg, away_xg, markets_json, is_demo)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
+                (created_at_utc, competition, home_team, away_team, home_xg, away_xg,
+                 markets_json, is_demo, fixture_id, match_date, result_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'pending')""",
                 (datetime.now(timezone.utc).isoformat(), fixture["competition"],
                  fixture["home_team"], fixture["away_team"], home_xg, away_xg,
-                 json.dumps(markets)))
+                 json.dumps(markets), fixture.get("fixture_id"), fixture.get("match_date")))
             prediction_id = cursor.lastrowid
             for entry in source_matches:
                 match = entry["match"]
@@ -164,8 +183,24 @@ class Store:
 
     def history(self):
         with self.connect() as db:
-            return db.execute("""SELECT created_at_utc, competition, home_team, away_team, home_xg, away_xg
-                FROM prediction_runs ORDER BY id DESC LIMIT 200""").fetchall()
+            return db.execute("""SELECT created_at_utc, competition, home_team, away_team,
+                home_xg, away_xg, result_status, actual_home_goals, actual_away_goals,
+                outcomes_json FROM prediction_runs ORDER BY id DESC LIMIT 200""").fetchall()
+
+    def pending_predictions(self):
+        with self.connect() as db:
+            return db.execute("""SELECT id, fixture_id, markets_json FROM prediction_runs
+                WHERE is_demo = 0 AND result_status = 'pending' AND fixture_id IS NOT NULL
+                ORDER BY id""").fetchall()
+
+    def settle_prediction(self, prediction_id, home_goals, away_goals, outcomes):
+        with self.connect() as db:
+            db.execute("""UPDATE prediction_runs SET result_status = 'settled',
+                actual_home_goals = ?, actual_away_goals = ?, settled_at_utc = ?,
+                outcomes_json = ? WHERE id = ? AND result_status = 'pending'""",
+                (home_goals, away_goals, datetime.now(timezone.utc).isoformat(),
+                 json.dumps(outcomes), prediction_id))
+
 
 
 class Card(QFrame):
@@ -431,6 +466,8 @@ class MainWindow(QMainWindow):
             "competition": (item.get("league") or {}).get("name", "Unknown"),
             "home_team": home_name,
             "away_team": away_name,
+            "fixture_id": (item.get("fixture") or {}).get("id"),
+            "match_date": fixture_date,
         }
         source_matches = (
             [{"team_side": "home", "team_id": home_id, "match": match} for match in home_used]
@@ -638,15 +675,23 @@ class MainWindow(QMainWindow):
 
     def history_page(self):
         page = QWidget(); box = QVBoxLayout(page)
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Saved UTC", "Competition", "Home", "Away", "Home xG", "Away xG"])
+        self.table = QTableWidget(0, 9)
+        self.table.setHorizontalHeaderLabels([
+            "Saved UTC", "Competition", "Home", "Away", "Home xG", "Away xG",
+            "Status", "Final score", "Market record"
+        ])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         enable_table_copy(self.table)
         self.table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.table)
-        refresh = QPushButton("Refresh history"); refresh.clicked.connect(self.refresh_history); box.addWidget(refresh)
+        controls = QHBoxLayout()
+        refresh = QPushButton("Refresh history"); refresh.clicked.connect(self.refresh_history); controls.addWidget(refresh)
+        settle = QPushButton("Check completed match results"); settle.clicked.connect(self.refresh_match_results); controls.addWidget(settle)
+        controls.addStretch(); box.addLayout(controls)
+        self.settlement_message = QLabel("Real fixture predictions are linked to their provider fixture IDs. Demo forecasts cannot be settled.")
+        self.settlement_message.setWordWrap(True); box.addWidget(self.settlement_message)
         return page
 
     def performance(self):
@@ -660,9 +705,58 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "table"): return
         rows = self.store.history(); self.table.setRowCount(len(rows))
         for i, row in enumerate(rows):
-            vals = [row[0].replace("T", " ")[:19], row[1], row[2], row[3], f"{row[4]:.2f}", f"{row[5]:.2f}"]
+            score = (f"{row[7]} - {row[8]}" if row[7] is not None and row[8] is not None else "—")
+            record = row[9] or "—"
+            if record != "—":
+                record = json.loads(record)
+                record = f"{record.get('correct', 0)}/{record.get('graded', 0)} markets"
+            vals = [row[0].replace("T", " ")[:19], row[1], row[2], row[3],
+                    f"{row[4]:.2f}", f"{row[5]:.2f}", row[6], score, record]
             for j, value in enumerate(vals): self.table.setItem(i, j, QTableWidgetItem(str(value)))
         if hasattr(self, "saved_card"): self.saved_card.value_label.setText(str(len(rows)))
+
+    def refresh_match_results(self):
+        key = self.get_api_key()
+        if not key:
+            QMessageBox.information(self, "API key needed", "Set your API-Football key before checking results.")
+            return
+        pending = self.store.pending_predictions()
+        if not pending:
+            self.settlement_message.setText("No linked pending real-match predictions need checking.")
+            return
+        checked = settled = 0
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for prediction_id, fixture_id, markets_json in pending:
+                match = fetch_fixture_by_id(fixture_id, api_key=key)
+                checked += 1
+                if not match:
+                    continue
+                status = ((match.get("fixture") or {}).get("status") or {}).get("short")
+                if status not in {"FT", "AET", "PEN"}:
+                    continue
+                goals = match.get("goals") or {}
+                home_goals, away_goals = goals.get("home"), goals.get("away")
+                if home_goals is None or away_goals is None:
+                    continue
+                outcomes = settle_markets(json.loads(markets_json), home_goals, away_goals)
+                self.store.settle_prediction(prediction_id, home_goals, away_goals, outcomes)
+                settled += 1
+        except ApiFootballError as exc:
+            self.settlement_message.setText(str(exc))
+            QMessageBox.warning(self, "Result check", str(exc))
+            return
+        except sqlite3.Error as exc:
+            self.settlement_message.setText(f"Could not save a result: {exc}")
+            QMessageBox.warning(self, "Result check", str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.refresh_history()
+        self.settlement_message.setText(
+            f"Checked {checked} linked predictions; settled {settled}. "
+            "Matches not yet finished remain Pending."
+        )
 
 
 def enable_text_selection(root):
