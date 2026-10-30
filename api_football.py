@@ -59,20 +59,22 @@ def _format_provider_errors(errors):
     return f"API-Football request error: {message[:600]}"
 
 
-def fetch_recent_team_fixtures(team_id, api_key=None, last=5, before_date=None, timeout=20):
+def fetch_recent_team_fixtures(team_id, api_key=None, last=5, before_date=None, season=None, timeout=20):
     """Fetch recent completed team fixtures using a free-plan-compatible date range."""
     key = api_key or os.environ.get('API_FOOTBALL_KEY')
     if not key:
         raise ApiFootballError("API key is missing. Enter it in the app settings.")
     if not team_id:
         raise ApiFootballError("A valid team ID is required.")
+    if season is None:
+        raise ApiFootballError("The competition season is required for recent-form lookup.")
     try:
         end_date = date.fromisoformat(before_date) if before_date else date.today()
     except (TypeError, ValueError):
         raise ApiFootballError("The selected fixture has an invalid date.") from None
     end_date -= timedelta(days=1)
     start_date = end_date - timedelta(days=180)
-    params = {'team': int(team_id), 'from': start_date.isoformat(), 'to': end_date.isoformat()}
+    params = {'team': int(team_id), 'season': int(season), 'from': start_date.isoformat(), 'to': end_date.isoformat()}
     try:
         response = requests.get(
             f'{BASE_URL}/fixtures',
