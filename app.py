@@ -42,6 +42,24 @@ class Store:
                 competition TEXT NOT NULL, home_team TEXT NOT NULL, away_team TEXT NOT NULL,
                 home_xg REAL NOT NULL, away_xg REAL NOT NULL, markets_json TEXT NOT NULL,
                 is_demo INTEGER NOT NULL DEFAULT 1)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS prediction_source_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                prediction_run_id INTEGER NOT NULL,
+                team_side TEXT NOT NULL,
+                fixture_id INTEGER,
+                match_date TEXT NOT NULL,
+                competition TEXT NOT NULL,
+                home_team TEXT NOT NULL,
+                away_team TEXT NOT NULL,
+                home_goals INTEGER,
+                away_goals INTEGER,
+                team_venue TEXT NOT NULL,
+                opponent TEXT NOT NULL,
+                team_result TEXT NOT NULL,
+                match_json TEXT NOT NULL,
+                FOREIGN KEY(prediction_run_id) REFERENCES prediction_runs(id))""")
+            db.execute("""CREATE INDEX IF NOT EXISTS idx_source_matches_prediction
+                ON prediction_source_matches(prediction_run_id, team_side, match_date)""")
 
     def connect(self):
         return sqlite3.connect(self.path)
@@ -53,6 +71,61 @@ class Store:
                 VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
                 (datetime.now(timezone.utc).isoformat(), fixture[0], fixture[1], fixture[2],
                  hxg, axg, json.dumps(markets)))
+
+    def save_analysis(self, fixture, home_xg, away_xg, markets, source_matches):
+        """Persist a real fixture analysis and the exact historical matches behind it."""
+        with self.connect() as db:
+            cursor = db.execute("""INSERT INTO prediction_runs
+                (created_at_utc, competition, home_team, away_team, home_xg, away_xg, markets_json, is_demo)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
+                (datetime.now(timezone.utc).isoformat(), fixture["competition"],
+                 fixture["home_team"], fixture["away_team"], home_xg, away_xg,
+                 json.dumps(markets)))
+            prediction_id = cursor.lastrowid
+            for entry in source_matches:
+                match = entry["match"]
+                fixture_data = match.get("fixture") or {}
+                league = match.get("league") or {}
+                teams = match.get("teams") or {}
+                goals = match.get("goals") or {}
+                home = teams.get("home") or {}
+                away = teams.get("away") or {}
+                team_id = entry["team_id"]
+                is_home = home.get("id") == team_id
+                opponent = (away if is_home else home).get("name", "Unknown")
+                hg, ag = goals.get("home"), goals.get("away")
+                if hg is None or ag is None:
+                    result = "Unknown"
+                elif hg == ag:
+                    result = "D"
+                elif (hg > ag) == is_home:
+                    result = "W"
+                else:
+                    result = "L"
+                db.execute("""INSERT INTO prediction_source_matches
+                    (prediction_run_id, team_side, fixture_id, match_date, competition,
+                     home_team, away_team, home_goals, away_goals, team_venue,
+                     opponent, team_result, match_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (prediction_id, entry["team_side"], fixture_data.get("id"),
+                     (fixture_data.get("date") or "")[:10],
+                     league.get("name", "Unknown"), home.get("name", "Unknown"),
+                     away.get("name", "Unknown"), hg, ag,
+                     "Home" if is_home else "Away", opponent, result,
+                     json.dumps(match)))
+        return prediction_id
+
+    def source_matches(self, prediction_id, team_side=None):
+        query = """SELECT team_side, fixture_id, match_date, competition, home_team,
+                   away_team, home_goals, away_goals, team_venue, opponent, team_result
+                   FROM prediction_source_matches WHERE prediction_run_id = ?"""
+        params = [prediction_id]
+        if team_side:
+            query += " AND team_side = ?"
+            params.append(team_side)
+        query += " ORDER BY match_date DESC, id DESC"
+        with self.connect() as db:
+            return db.execute(query, params).fetchall()
 
     def history(self):
         with self.connect() as db:
