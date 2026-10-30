@@ -60,46 +60,63 @@ def _format_provider_errors(errors):
 
 
 def fetch_recent_team_fixtures(team_id, api_key=None, last=5, before_date=None, season=None, timeout=20):
-    """Fetch recent completed team fixtures using a free-plan-compatible date range."""
-    key = api_key or os.environ.get('API_FOOTBALL_KEY')
+    """Fetch completed team fixtures from seasons accessible on the Free plan."""
+    key = api_key or os.environ.get("API_FOOTBALL_KEY")
     if not key:
         raise ApiFootballError("API key is missing. Enter it in the app settings.")
     if not team_id:
         raise ApiFootballError("A valid team ID is required.")
-    if season is None:
-        raise ApiFootballError("The competition season is required for recent-form lookup.")
     try:
-        end_date = date.fromisoformat(before_date) if before_date else date.today()
+        cutoff = date.fromisoformat(before_date) if before_date else date.today()
     except (TypeError, ValueError):
         raise ApiFootballError("The selected fixture has an invalid date.") from None
-    end_date -= timedelta(days=1)
-    start_date = end_date - timedelta(days=180)
-    params = {'team': int(team_id), 'season': int(season), 'from': start_date.isoformat(), 'to': end_date.isoformat()}
-    try:
-        response = requests.get(
-            f'{BASE_URL}/fixtures',
-            headers={'x-apisports-key': key},
-            params=params,
-            timeout=timeout,
-        )
-    except requests.RequestException as exc:
-        raise ApiFootballError(f"Could not reach API-Football: {exc.__class__.__name__}") from None
-    if response.status_code in (401, 403):
-        raise ApiFootballError("API-Football rejected the key or plan access. Check the dashboard and subscription.")
-    if response.status_code == 429:
-        raise ApiFootballError("API-Football request limit reached. Try again later.")
-    if not response.ok:
-        raise ApiFootballError(f"API-Football returned HTTP {response.status_code}.")
-    try:
-        payload = response.json()
-    except ValueError:
-        raise ApiFootballError("API-Football returned an unreadable response.") from None
-    errors = payload.get('errors')
-    if errors:
-        raise ApiFootballError(_format_provider_errors(errors))
-    completed = [
-        match for match in payload.get('response', [])
-        if ((match.get('fixture') or {}).get('status') or {}).get('short') in {'FT', 'AET', 'PEN'}
-    ]
-    completed.sort(key=lambda match: (match.get('fixture') or {}).get('date', ''), reverse=True)
-    return completed[:max(1, int(last))]
+
+    # The Free plan currently rejects newer seasons for this account.
+    # Try the documented accessible historical range, newest first.
+    seasons_to_try = [2024, 2023, 2022]
+    completed = []
+    requested = max(1, int(last))
+    for year in seasons_to_try:
+        params = {"team": int(team_id), "season": year}
+        try:
+            response = requests.get(
+                f"{BASE_URL}/fixtures",
+                headers={"x-apisports-key": key},
+                params=params,
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            raise ApiFootballError(f"Could not reach API-Football: {exc.__class__.__name__}") from None
+        if response.status_code in (401, 403):
+            raise ApiFootballError("API-Football rejected the key or plan access. Check the dashboard and subscription.")
+        if response.status_code == 429:
+            raise ApiFootballError("API-Football request limit reached. Try again later.")
+        if not response.ok:
+            raise ApiFootballError(f"API-Football returned HTTP {response.status_code}.")
+        try:
+            payload = response.json()
+        except ValueError:
+            raise ApiFootballError("API-Football returned an unreadable response.") from None
+        errors = payload.get("errors")
+        if errors:
+            # If the provider denies a season, continue to the next allowed year.
+            detail = _format_provider_errors(errors)
+            if year != seasons_to_try[-1] and ("season" in detail.lower() or "plan" in detail.lower()):
+                continue
+            raise ApiFootballError(detail)
+
+        for match in payload.get("response", []):
+            fixture = match.get("fixture") or {}
+            status = (fixture.get("status") or {}).get("short")
+            match_date = (fixture.get("date") or "")[:10]
+            if status in {"FT", "AET", "PEN"} and match_date:
+                try:
+                    if date.fromisoformat(match_date) < cutoff:
+                        completed.append(match)
+                except ValueError:
+                    continue
+        completed.sort(key=lambda match: (match.get("fixture") or {}).get("date", ""), reverse=True)
+        if len(completed) >= requested:
+            break
+
+    return completed[:requested]
