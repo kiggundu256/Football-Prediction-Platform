@@ -125,3 +125,71 @@ def fetch_recent_team_fixtures(team_id, api_key=None, last=5, before_date=None, 
             break
 
     return completed[:requested]
+
+
+def fetch_head_to_head_fixtures(home_team_id, away_team_id, api_key=None, before_date=None, limit=10, timeout=20):
+    """Fetch recent completed meetings without using the restricted 'last' parameter."""
+    key = api_key or os.environ.get("API_FOOTBALL_KEY")
+    if not key:
+        raise ApiFootballError("API key is missing. Enter it in the app settings.")
+    if not home_team_id or not away_team_id:
+        raise ApiFootballError("Both team IDs are required for head-to-head data.")
+    try:
+        cutoff = date.fromisoformat(before_date) if before_date else date.today()
+    except (TypeError, ValueError):
+        raise ApiFootballError("The selected fixture has an invalid date.") from None
+
+    completed = []
+    seen = set()
+    for year in (2024, 2023, 2022):
+        try:
+            response = requests.get(
+                f"{BASE_URL}/fixtures/headtohead",
+                headers={"x-apisports-key": key},
+                params={"h2h": f"{int(home_team_id)}-{int(away_team_id)}", "season": year},
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            raise ApiFootballError(f"Could not reach API-Football: {exc.__class__.__name__}") from None
+        if response.status_code in (401, 403):
+            raise ApiFootballError("API-Football rejected the key or plan access. Check the dashboard and subscription.")
+        if response.status_code == 429:
+            raise ApiFootballError("API-Football request limit reached. Try again later.")
+        if not response.ok:
+            raise ApiFootballError(f"API-Football returned HTTP {response.status_code}.")
+        try:
+            payload = response.json()
+        except ValueError:
+            raise ApiFootballError("API-Football returned an unreadable response.") from None
+        errors = payload.get("errors")
+        if errors:
+            detail = _format_provider_errors(errors)
+            if year != 2022 and ("season" in detail.lower() or "plan" in detail.lower()):
+                continue
+            raise ApiFootballError(detail)
+
+        for match in payload.get("response", []):
+            fixture = match.get("fixture") or {}
+            status = (fixture.get("status") or {}).get("short")
+            match_date = (fixture.get("date") or "")[:10]
+            fixture_id = fixture.get("id")
+            goals = match.get("goals") or {}
+            if status not in {"FT", "AET", "PEN"} or not match_date:
+                continue
+            if goals.get("home") is None or goals.get("away") is None:
+                continue
+            try:
+                if date.fromisoformat(match_date) >= cutoff:
+                    continue
+            except ValueError:
+                continue
+            if fixture_id is not None and fixture_id in seen:
+                continue
+            completed.append(match)
+            if fixture_id is not None:
+                seen.add(fixture_id)
+        completed.sort(key=lambda item: (item.get("fixture") or {}).get("date", ""), reverse=True)
+        if len(completed) >= max(1, int(limit)):
+            break
+    completed.sort(key=lambda item: (item.get("fixture") or {}).get("date", ""), reverse=True)
+    return completed[:max(1, int(limit))]
