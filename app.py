@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 from api_football import ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures
 from prediction_engine import predict_markets
+from analysis_explainer import team_profile, build_analysis_explanation
 from ui_theme import APP_STYLESHEET
 
 APP_NAME = "Football Prediction Platform"
@@ -368,24 +369,8 @@ class MainWindow(QMainWindow):
         home_used = matches_used(home_recent, home_id)
         away_used = matches_used(away_recent, away_id)
 
-        def team_rates(fixtures, team_id):
-            scored, conceded = [], []
-            for match in fixtures:
-                goals = match.get("goals") or {}
-                match_teams = match.get("teams") or {}
-                match_home = match_teams.get("home") or {}
-                match_away = match_teams.get("away") or {}
-                hg, ag = goals.get("home"), goals.get("away")
-                if match_home.get("id") == team_id:
-                    scored.append(float(hg)); conceded.append(float(ag))
-                elif match_away.get("id") == team_id:
-                    scored.append(float(ag)); conceded.append(float(hg))
-            if not scored:
-                return None
-            return sum(scored) / len(scored), sum(conceded) / len(conceded), len(scored)
-
-        hr = team_rates(home_used, home_id)
-        ar = team_rates(away_used, away_id)
+        hr = team_profile(home_used, home_id)
+        ar = team_profile(away_used, away_id)
         if not hr or not ar:
             QMessageBox.information(
                 self, "Not enough results",
@@ -419,21 +404,26 @@ class MainWindow(QMainWindow):
             return
 
         scores = ", ".join(f"{h}-{a} ({p:.1%})" for h, a, p in markets["top_scores"][:5])
+        explanation = build_analysis_explanation(
+            home_name, away_name, hr, ar, home_xg, away_xg, markets
+        )
         report = (
-            f"{home_name} vs {away_name}\n\n"
-            f"Historical completed matches used (Free-plan seasons 2022–2024): "
-            f"{home_name} {hr[2]}, {away_name} {ar[2]} (up to 5 each)\n"
-            f"Average goals scored/conceded — {home_name}: {hr[0]:.2f}/{hr[1]:.2f}; "
-            f"{away_name}: {ar[0]:.2f}/{ar[1]:.2f}\n\n"
-            f"Form-based estimated goals: {home_name} {home_xg:.2f} — {away_xg:.2f} {away_name}\n"
-            f"1X2: Home {markets['home_win']:.1%} | Draw {markets['draw']:.1%} | Away {markets['away_win']:.1%}\n"
+            f"{home_name} vs {away_name}\\n"
+            f"{(item.get('league') or {}).get('name', 'Unknown')} • Analysis #{prediction_id}\\n\\n"
+            "MODEL INPUTS\\n"
+            f"Historical completed matches: {home_name} {hr['played']}, {away_name} {ar['played']} "
+            "(up to 5 per team; Free-plan seasons 2022–2024)\\n"
+            f"Estimated goals (xG-style baseline): {home_name} {home_xg:.2f} — "
+            f"{away_xg:.2f} {away_name}\\n\\n"
+            "PREDICTED MARKETS\\n"
+            f"1X2: Home {markets['home_win']:.1%} | Draw {markets['draw']:.1%} | Away {markets['away_win']:.1%}\\n"
             f"Over 1.5 {markets['over']['1.5']:.1%} | Over 2.5 {markets['over']['2.5']:.1%} | "
-            f"Over 3.5 {markets['over']['3.5']:.1%}\n"
-            f"BTTS Yes {markets['btts_yes']:.1%} | BTTS No {markets['btts_no']:.1%}\n"
-            f"Top scorelines: {scores}\n\n"
-            "DATA LIMITATION: Free-plan historical seasons 2022–2024 are used; this is not current-season form.\n"
-            "EARLY BASELINE: uses historical goals only, not opponent strength, home advantage, injuries, lineups, "
-            "corners or referee/weather data. Probabilities are experimental and are not validated betting advice."
+            f"Over 3.5 {markets['over']['3.5']:.1%}\\n"
+            f"BTTS Yes {markets['btts_yes']:.1%} | BTTS No {markets['btts_no']:.1%}\\n"
+            f"Most likely scorelines: {scores}\\n\\n"
+            + "\\n".join(explanation)
+            + "\\n\\nDATA COVERAGE: The free-plan historical seasons 2022–2024 are used; "
+            "this is not current-season form."
         )
         self.api_message.setText(
             f"Analysis ready and saved (#{prediction_id}) for {home_name} vs {away_name}. "
