@@ -3,6 +3,7 @@ from math import exp, factorial
 
 
 DEFAULT_LINES = (7.5, 8.5, 9.5, 10.5, 11.5)
+DEFAULT_TEAM_LINES = (2.5, 3.5, 4.5, 5.5, 6.5, 7.5)
 
 
 def _poisson_probability(count, expected):
@@ -20,7 +21,7 @@ def _over_probabilities(expected, lines, max_count):
 
 def predict_corner_markets(
     home_corners_for, home_corners_against, away_corners_for, away_corners_against,
-    lines=DEFAULT_LINES, max_corners=40,
+    lines=DEFAULT_LINES, team_lines=DEFAULT_TEAM_LINES, max_corners=40,
 ):
     """Estimate team and match corner markets; missing observations are rejected."""
     values = (home_corners_for, home_corners_against, away_corners_for, away_corners_against)
@@ -32,8 +33,9 @@ def predict_corner_markets(
         raise ValueError("Corner averages must be numeric.") from None
     if any(value < 0 or value > 30 for value in values):
         raise ValueError("Corner averages must be between 0 and 30.")
-    if not lines or any(float(line) < 0 for line in lines):
-        raise ValueError("At least one non-negative market line is required.")
+    if (not lines or any(float(line) < 0 for line in lines)
+            or not team_lines or any(float(line) < 0 for line in team_lines)):
+        raise ValueError("At least one non-negative total and team market line is required.")
     if max_corners < 1:
         raise ValueError("max_corners must be positive.")
 
@@ -41,8 +43,8 @@ def predict_corner_markets(
     away_expected = (values[2] + values[1]) / 2
     total_expected = home_expected + away_expected
     total_over = _over_probabilities(total_expected, lines, max_corners)
-    home_over = _over_probabilities(home_expected, lines, max_corners)
-    away_over = _over_probabilities(away_expected, lines, max_corners)
+    home_over = _over_probabilities(home_expected, team_lines, max_corners)
+    away_over = _over_probabilities(away_expected, team_lines, max_corners)
     return {
         "home_expected": home_expected,
         "away_expected": away_expected,

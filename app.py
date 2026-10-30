@@ -273,7 +273,8 @@ class Store:
     def performance_records(self):
         """Return saved and settled real predictions for accuracy reporting."""
         with self.connect() as db:
-            return db.execute("""SELECT created_at_utc, result_status, outcomes_json
+            return db.execute("""SELECT created_at_utc, result_status, outcomes_json,
+                markets_json, actual_home_goals, actual_away_goals
                 FROM prediction_runs WHERE is_demo = 0 ORDER BY created_at_utc""").fetchall()
 
     def settle_prediction(self, prediction_id, home_goals, away_goals, outcomes):
@@ -1558,9 +1559,13 @@ class MainWindow(QMainWindow):
         self.performance_saved_card = Card("REAL PREDICTIONS", "0", "Saved from live fixtures")
         self.performance_settled_card = Card("SETTLED MATCHES", "0", "Verified final scores")
         self.performance_accuracy_card = Card("MARKET ACCURACY", "—", "Correct selections / graded markets")
+        self.performance_brier_card = Card("1X2 BRIER SCORE", "—", "Lower is better; probability quality")
+        self.performance_logloss_card = Card("1X2 LOG LOSS", "—", "Lower is better; penalizes overconfidence")
         cards.addWidget(self.performance_saved_card, 0, 0)
         cards.addWidget(self.performance_settled_card, 0, 1)
         cards.addWidget(self.performance_accuracy_card, 0, 2)
+        cards.addWidget(self.performance_brier_card, 1, 0)
+        cards.addWidget(self.performance_logloss_card, 1, 1)
         box.addLayout(cards)
 
         market_title = QLabel("Accuracy by prediction market")
@@ -1576,8 +1581,11 @@ class MainWindow(QMainWindow):
         daily_title = QLabel("Daily prediction performance")
         daily_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
         box.addWidget(daily_title)
-        self.daily_performance_table = QTableWidget(0, 4)
-        self.daily_performance_table.setHorizontalHeaderLabels(["Prediction date", "Settled matches", "Correct markets", "Market accuracy"])
+        self.daily_performance_table = QTableWidget(0, 6)
+        self.daily_performance_table.setHorizontalHeaderLabels([
+            "Prediction date", "Settled matches", "Correct markets", "Market accuracy",
+            "1X2 Brier", "1X2 Log loss"
+        ])
         self.daily_performance_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.daily_performance_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.daily_performance_table.horizontalHeader().setStretchLastSection(True)
@@ -1598,6 +1606,10 @@ class MainWindow(QMainWindow):
         self.performance_settled_card.value_label.setText(str(summary["settled_predictions"]))
         accuracy = summary["accuracy"]
         self.performance_accuracy_card.value_label.setText(f"{accuracy:.1%}" if accuracy is not None else "—")
+        brier = summary.get("brier_score")
+        log_loss = summary.get("log_loss")
+        self.performance_brier_card.value_label.setText(f"{brier:.3f}" if brier is not None else "—")
+        self.performance_logloss_card.value_label.setText(f"{log_loss:.3f}" if log_loss is not None else "—")
 
         market_rows = sorted(summary["by_market"].items(), key=lambda item: item[0])
         self.market_performance_table.setRowCount(len(market_rows))
@@ -1610,8 +1622,12 @@ class MainWindow(QMainWindow):
         daily_rows = sorted(summary["by_day"].items(), reverse=True)
         self.daily_performance_table.setRowCount(len(daily_rows))
         for row, (day, stats) in enumerate(daily_rows):
-            values = [day, stats["matches"], f"{stats['correct']} / {stats['graded']}",
-                      f"{stats['correct'] / stats['graded']:.1%}" if stats["graded"] else "—"]
+            values = [
+                day, stats["matches"], f"{stats['correct']} / {stats['graded']}",
+                f"{stats['correct'] / stats['graded']:.1%}" if stats["graded"] else "—",
+                f"{stats['brier_score']:.3f}" if stats.get("brier_score") is not None else "—",
+                f"{stats['log_loss']:.3f}" if stats.get("log_loss") is not None else "—",
+            ]
             for column, value in enumerate(values):
                 self.daily_performance_table.setItem(row, column, QTableWidgetItem(str(value)))
 
