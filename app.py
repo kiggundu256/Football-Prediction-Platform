@@ -98,8 +98,9 @@ class Store:
     def save(self, fixture, hxg, axg, markets):
         with self.connect() as db:
             db.execute("""INSERT INTO prediction_runs
-                (created_at_utc, competition, home_team, away_team, home_xg, away_xg, markets_json, is_demo)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
+                (created_at_utc, competition, home_team, away_team, home_xg, away_xg,
+                 markets_json, is_demo, result_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'demo')""",
                 (datetime.now(timezone.utc).isoformat(), fixture[0], fixture[1], fixture[2],
                  hxg, axg, json.dumps(markets)))
 
