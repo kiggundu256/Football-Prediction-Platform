@@ -127,6 +127,60 @@ def fetch_recent_team_fixtures(team_id, api_key=None, last=5, before_date=None, 
     return completed[:requested]
 
 
+
+def fetch_fixture_corner_statistics(fixture_id, api_key=None, timeout=20):
+    """Return observed corner kicks by team ID for one fixture.
+
+    Missing coverage is represented by None for that team's corners. This
+    endpoint may not provide statistics for every competition or season.
+    """
+    key = api_key or os.environ.get("API_FOOTBALL_KEY")
+    if not key:
+        raise ApiFootballError("API key is missing. Enter it in the app settings.")
+    if not fixture_id:
+        raise ApiFootballError("A valid fixture ID is required.")
+    try:
+        response = requests.get(
+            f"{BASE_URL}/fixtures/statistics",
+            headers={"x-apisports-key": key},
+            params={"fixture": int(fixture_id), "type": "Corner Kicks"},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise ApiFootballError(f"Could not reach API-Football: {exc.__class__.__name__}") from None
+    if response.status_code in (401, 403):
+        raise ApiFootballError("API-Football rejected the key or plan access. Check the dashboard and subscription.")
+    if response.status_code == 429:
+        raise ApiFootballError("API-Football request limit reached. Try again later.")
+    if not response.ok:
+        raise ApiFootballError(f"API-Football returned HTTP {response.status_code}.")
+    try:
+        payload = response.json()
+    except ValueError:
+        raise ApiFootballError("API-Football returned an unreadable response.") from None
+    errors = payload.get("errors")
+    if errors:
+        raise ApiFootballError(_format_provider_errors(errors))
+
+    corners_by_team = {}
+    for team_stats in payload.get("response", []):
+        team = team_stats.get("team") or {}
+        team_id = team.get("id")
+        if team_id is None:
+            continue
+        corners = None
+        for statistic in team_stats.get("statistics") or []:
+            if (statistic.get("type") or "").strip().lower() == "corner kicks":
+                value = statistic.get("value")
+                if value is not None:
+                    try:
+                        corners = int(str(value).replace(",", "").strip())
+                    except (TypeError, ValueError):
+                        corners = None
+                break
+        corners_by_team[int(team_id)] = corners
+    return corners_by_team
+
 def fetch_fixture_by_id(fixture_id, api_key=None, timeout=20):
     """Fetch one fixture by provider ID for prediction-result settlement."""
     key = api_key or os.environ.get("API_FOOTBALL_KEY")
