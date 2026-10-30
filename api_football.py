@@ -40,9 +40,23 @@ def fetch_fixtures(api_key=None, date=None, league=None, season=None, timeout=20
         payload = response.json()
     except ValueError:
         raise ApiFootballError("API-Football returned an unreadable response.") from None
-    if payload.get("errors"):
-        raise ApiFootballError("API-Football reported a request error. Check the date, league, season and plan.")
+    errors = payload.get("errors")
+    if errors:
+        raise ApiFootballError(_format_provider_errors(errors))
     return payload.get("response", [])
+
+
+def _format_provider_errors(errors):
+    """Show useful provider diagnostics without exposing request headers or credentials."""
+    if isinstance(errors, dict):
+        details = [f"{key}: {value}" for key, value in errors.items() if value not in (None, "", [], {})]
+    elif isinstance(errors, list):
+        details = [str(value) for value in errors if value not in (None, "")]
+    else:
+        details = [str(errors)]
+    message = "; ".join(details) or "The provider returned an unspecified request error."
+    return f"API-Football request error: {message[:600]}"
+
 
 def fetch_recent_team_fixtures(team_id, api_key=None, last=5, timeout=20):
     """Fetch a team's most recent fixtures for basic form analysis."""
@@ -70,6 +84,7 @@ def fetch_recent_team_fixtures(team_id, api_key=None, last=5, timeout=20):
         payload = response.json()
     except ValueError:
         raise ApiFootballError("API-Football returned an unreadable response.") from None
-    if payload.get("errors"):
-        raise ApiFootballError("API-Football reported a request error. Check provider access and request parameters.")
+    errors = payload.get("errors")
+    if errors:
+        raise ApiFootballError(_format_provider_errors(errors))
     return payload.get("response", [])
