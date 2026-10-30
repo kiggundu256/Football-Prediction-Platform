@@ -75,6 +75,7 @@ def fetch_recent_team_fixtures(team_id, api_key=None, last=5, before_date=None, 
     # Try the documented accessible historical range, newest first.
     seasons_to_try = [2024, 2023, 2022]
     completed = []
+    seen_fixture_ids = set()
     requested = max(1, int(last))
     for year in seasons_to_try:
         params = {"team": int(team_id), "season": year}
@@ -112,7 +113,11 @@ def fetch_recent_team_fixtures(team_id, api_key=None, last=5, before_date=None, 
             if status in {"FT", "AET", "PEN"} and match_date:
                 try:
                     if date.fromisoformat(match_date) < cutoff:
-                        completed.append(match)
+                        fixture_id = fixture.get("id")
+                        if fixture_id is None or fixture_id not in seen_fixture_ids:
+                            completed.append(match)
+                            if fixture_id is not None:
+                                seen_fixture_ids.add(fixture_id)
                 except ValueError:
                     continue
         completed.sort(key=lambda match: (match.get("fixture") or {}).get("date", ""), reverse=True)
