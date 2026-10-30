@@ -380,8 +380,8 @@ class MainWindow(QMainWindow):
             self.api_message.setText("Not enough completed results with scores to calculate a form-based estimate.")
             return
 
-        home_xg = max(0.05, (hr[0] + ar[1]) / 2)
-        away_xg = max(0.05, (ar[0] + hr[1]) / 2)
+        home_xg = max(0.05, (hr["scored_avg"] + ar["conceded_avg"]) / 2)
+        away_xg = max(0.05, (ar["scored_avg"] + hr["conceded_avg"]) / 2)
         markets = predict_markets(home_xg, away_xg)
         fixture_info = {
             "competition": (item.get("league") or {}).get("name", "Unknown"),
