@@ -48,6 +48,22 @@ class FixtureViewTests(unittest.TestCase):
         )
         self.assertEqual(len(selected), 1)
 
+
+    def test_fixture_details_do_not_assume_unavailable_intelligence(self):
+        # A fixture without optional provider fields must remain explicitly unavailable.
+        from fixture_intelligence import intelligence_availability
+        result = intelligence_availability({"fixture": {}}, demo=False)
+        self.assertEqual(result["referee"], "Not supplied")
+        self.assertEqual(result["injuries"], "Not loaded")
+        self.assertEqual(result["lineups"], "Not loaded")
+        self.assertEqual(result["weather"], "Not loaded")
+        self.assertEqual(result["corners"], "Not loaded")
+
+    def test_demo_intelligence_is_never_presented_as_real(self):
+        from fixture_intelligence import intelligence_availability
+        result = intelligence_availability({"fixture": {"referee": "Sample Ref"}}, demo=True)
+        self.assertTrue(all(value == "Demo only" for value in result.values()))
+
     def test_competition_options_are_sorted_and_include_all(self):
         self.assertEqual(
             competition_options(self.fixtures),

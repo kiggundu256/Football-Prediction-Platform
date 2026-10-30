@@ -458,6 +458,20 @@ class MainWindow(QMainWindow):
             "padding:10px;color:#D7E3F5"
         )
         box.addWidget(self.fixture_details)
+
+        intelligence_heading = QLabel("MATCH INTELLIGENCE")
+        intelligence_heading.setStyleSheet("font-size:13px;font-weight:800;color:#168BFF;padding-top:5px")
+        box.addWidget(intelligence_heading)
+        self.match_intelligence = QLabel(
+            "Injuries & suspensions: Not loaded  •  Expected lineups: Not loaded  •  "
+            "Referee: Not supplied  •  Weather: Not loaded  •  Corner data: Not loaded"
+        )
+        self.match_intelligence.setWordWrap(True)
+        self.match_intelligence.setStyleSheet(
+            "background:#111D30;border:1px solid #26364D;border-radius:8px;"
+            "padding:10px;color:#D7E3F5"
+        )
+        box.addWidget(self.match_intelligence)
         return page
 
     def clear_fixture_filters(self):
@@ -538,6 +552,19 @@ class MainWindow(QMainWindow):
             f"Round: {league.get('round') or 'Not supplied'}  |  "
             f"Referee: {fixture.get('referee') or 'Not supplied'}"
         )
+        referee = fixture.get("referee") or "Not supplied by fixture feed"
+        if self.fixture_data_mode == "demo":
+            intelligence = (
+                "DEMO DATA — no real match intelligence is attached. "
+                "Injuries & suspensions: Not available  •  Expected lineups: Not available  •  "
+                "Referee: Sample fixture only  •  Weather: Not available  •  Corner data: Not available"
+            )
+        else:
+            intelligence = (
+                f"Injuries & suspensions: Not loaded  •  Expected lineups: Not loaded  •  "
+                f"Referee: {referee}  •  Weather: Not loaded  •  Corner data: Not loaded"
+            )
+        self.match_intelligence.setText(intelligence)
 
     def get_api_key(self):
         try:
