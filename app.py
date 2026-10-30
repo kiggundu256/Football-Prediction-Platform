@@ -1295,10 +1295,13 @@ class MainWindow(QMainWindow):
                 ("Draw", markets["draw"]),
                 (away_name + " win", markets["away_win"]),
             ])
-            add_market_row("TOTAL GOALS", [
-                ("Over 1.5", markets["over"]["1.5"]),
-                ("Over 2.5", markets["over"]["2.5"]),
-                ("Over 3.5", markets["over"]["3.5"]),
+            add_market_row("GOALS OVER", [
+                (f"Over {line}", probability)
+                for line, probability in markets["over"].items()
+            ])
+            add_market_row("GOALS UNDER", [
+                (f"Under {line}", 1.0 - probability)
+                for line, probability in markets["over"].items()
             ])
             add_market_row("BTTS", [
                 ("Yes", markets["btts_yes"]),
@@ -1306,13 +1309,16 @@ class MainWindow(QMainWindow):
             ])
             corner_markets = markets.get("corners")
             if corner_markets:
-                for title, key_name in (
-                    ("TOTAL CORNERS", "over"),
-                    ("HOME CORNERS", "home_over"),
-                    ("AWAY CORNERS", "away_over"),
+                for title, key_name, under_key in (
+                    ("TOTAL CORNERS OVER", "over", "under"),
+                    ("TOTAL CORNERS UNDER", "under", None),
+                    ("HOME CORNERS OVER", "home_over", "home_under"),
+                    ("HOME CORNERS UNDER", "home_under", None),
+                    ("AWAY CORNERS OVER", "away_over", "away_under"),
+                    ("AWAY CORNERS UNDER", "away_under", None),
                 ):
                     add_market_row(title, [
-                        (f"Over {line}", probability)
+                        (f"{'Under' if 'UNDER' in title else 'Over'} {line}", probability)
                         for line, probability in corner_markets[key_name].items()
                     ])
             else:
