@@ -22,6 +22,7 @@ from api_football import fetch_head_to_head_fixtures, fetch_fixture_by_id
 from head_to_head import summarize_head_to_head
 from ui_theme import APP_STYLESHEET
 from settlement import settle_markets
+from performance_metrics import summarize_performance
 
 APP_NAME = "Football Prediction Platform"
 KEYRING_SERVICE = "FootballPredictionPlatform"
@@ -753,41 +754,13 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "market_performance_table"):
             return
         records = self.store.performance_records()
-        settled = []
-        for created_at, status, outcomes_json in records:
-            if status != "settled" or not outcomes_json:
-                continue
-            try:
-                outcomes = json.loads(outcomes_json)
-            except (TypeError, ValueError):
-                continue
-            settled.append((created_at, outcomes))
-
-        total_correct = total_graded = 0
-        market_stats = {}
-        daily_stats = {}
-        for created_at, outcomes in settled:
-            date_key = (created_at or "Unknown")[:10]
-            day = daily_stats.setdefault(date_key, {"matches": 0, "correct": 0, "graded": 0})
-            day["matches"] += 1
-            for market_name, result in (outcomes.get("markets") or {}).items():
-                if not isinstance(result, dict) or "correct" not in result:
-                    continue
-                stats = market_stats.setdefault(market_name, {"correct": 0, "graded": 0})
-                stats["graded"] += 1
-                day["graded"] += 1
-                total_graded += 1
-                if bool(result["correct"]):
-                    stats["correct"] += 1
-                    day["correct"] += 1
-                    total_correct += 1
-
+        summary = summarize_performance(records)
         self.performance_saved_card.value_label.setText(str(len(records)))
-        self.performance_settled_card.value_label.setText(str(len(settled)))
-        accuracy = f"{(total_correct / total_graded):.1%}" if total_graded else "—"
-        self.performance_accuracy_card.value_label.setText(accuracy)
+        self.performance_settled_card.value_label.setText(str(summary["settled_predictions"]))
+        accuracy = summary["accuracy"]
+        self.performance_accuracy_card.value_label.setText(f"{accuracy:.1%}" if accuracy is not None else "—")
 
-        market_rows = sorted(market_stats.items(), key=lambda item: item[0])
+        market_rows = sorted(summary["by_market"].items(), key=lambda item: item[0])
         self.market_performance_table.setRowCount(len(market_rows))
         for row, (name, stats) in enumerate(market_rows):
             values = [name, stats["graded"], stats["correct"],
@@ -795,7 +768,7 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 self.market_performance_table.setItem(row, column, QTableWidgetItem(str(value)))
 
-        daily_rows = sorted(daily_stats.items(), reverse=True)
+        daily_rows = sorted(summary["by_day"].items(), reverse=True)
         self.daily_performance_table.setRowCount(len(daily_rows))
         for row, (day, stats) in enumerate(daily_rows):
             values = [day, stats["matches"], f"{stats['correct']} / {stats['graded']}",
