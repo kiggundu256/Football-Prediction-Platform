@@ -1031,16 +1031,34 @@ class MainWindow(QMainWindow):
         model_features = build_model_features(hr, ar, home_xg_seed, away_xg_seed)
         local_ml = train_outcome_model(self.store.training_records())
         ml_probabilities = predict_outcome(local_ml, model_features) if local_ml else None
+        selected_fixture_data = item.get("fixture") or {}
+        selected_fixture_id = selected_fixture_data.get("id")
+        corner_averages = self.store.get_provider_cache(
+            f"corner_averages:{selected_fixture_id}", 30 * 24 * 60 * 60
+        )
+        injuries_data = self.store.get_provider_cache(f"injuries:{selected_fixture_id}", 30 * 60)
+        lineups_data = self.store.get_provider_cache(f"lineups:{selected_fixture_id}", 10 * 60)
+        weather_data = None
+        venue_data = selected_fixture_data.get("venue") or {}
+        if venue_data.get("id"):
+            cached_venue = self.store.get_provider_cache(f"venue:{venue_data['id']}", 30 * 24 * 60 * 60) or {}
+            if cached_venue.get("latitude") is not None and cached_venue.get("longitude") is not None:
+                weather_key = f"weather:{cached_venue.get('latitude')}:{cached_venue.get('longitude')}:{fixture_date}"
+                weather_data = self.store.get_provider_cache(weather_key, 60 * 60)
+        context_quality = {
+            "injuries": injuries_data is not None,
+            "lineups": lineups_data is not None,
+            "referee": bool(selected_fixture_data.get("referee")),
+            "weather": weather_data is not None,
+            "corners": corner_averages is not None,
+        }
         ensemble = predict_ensemble(
             hr, ar, ml_probabilities=ml_probabilities,
             ml_samples=local_ml["samples"] if local_ml else 0,
+            context=context_quality,
         )
         home_xg, away_xg = ensemble["home_xg"], ensemble["away_xg"]
         markets = ensemble["markets"]
-        corner_averages = self.store.get_provider_cache(
-            f"corner_averages:{(item.get('fixture') or {}).get('id')}",
-            30 * 24 * 60 * 60,
-        )
         if corner_averages:
             try:
                 markets["corners"] = predict_corner_markets(
