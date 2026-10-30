@@ -194,6 +194,12 @@ class Store:
                 WHERE is_demo = 0 AND result_status = 'pending' AND fixture_id IS NOT NULL
                 ORDER BY id""").fetchall()
 
+    def performance_records(self):
+        """Return saved and settled real predictions for accuracy reporting."""
+        with self.connect() as db:
+            return db.execute("""SELECT created_at_utc, result_status, outcomes_json
+                FROM prediction_runs WHERE is_demo = 0 ORDER BY created_at_utc""").fetchall()
+
     def settle_prediction(self, prediction_id, home_goals, away_goals, outcomes):
         with self.connect() as db:
             db.execute("""UPDATE prediction_runs SET result_status = 'settled',
@@ -702,10 +708,100 @@ class MainWindow(QMainWindow):
 
     def performance(self):
         page = QWidget(); box = QVBoxLayout(page)
-        title = QLabel("Performance Lab"); title.setStyleSheet("font-size:20px;font-weight:700;color:#EAF2FF")
+        title = QLabel("Performance Lab")
+        title.setStyleSheet("font-size:20px;font-weight:700;color:#EAF2FF")
         box.addWidget(title)
-        box.addWidget(QLabel("No accuracy scores yet: verified results, settlement, Brier score, log loss and calibration will be added after real fixture data is validated."))
-        box.addStretch(); return page
+        intro = QLabel("Measure how the platform performs using only real predictions with verified final scores. Demo forecasts and pending matches are excluded.")
+        intro.setWordWrap(True); box.addWidget(intro)
+
+        cards = QGridLayout()
+        self.performance_saved_card = Card("REAL PREDICTIONS", "0", "Saved from live fixtures")
+        self.performance_settled_card = Card("SETTLED MATCHES", "0", "Verified final scores")
+        self.performance_accuracy_card = Card("MARKET ACCURACY", "—", "Correct selections / graded markets")
+        cards.addWidget(self.performance_saved_card, 0, 0)
+        cards.addWidget(self.performance_settled_card, 0, 1)
+        cards.addWidget(self.performance_accuracy_card, 0, 2)
+        box.addLayout(cards)
+
+        market_title = QLabel("Accuracy by prediction market")
+        market_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
+        box.addWidget(market_title)
+        self.market_performance_table = QTableWidget(0, 4)
+        self.market_performance_table.setHorizontalHeaderLabels(["Market", "Graded predictions", "Correct", "Accuracy"])
+        self.market_performance_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.market_performance_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.market_performance_table.horizontalHeader().setStretchLastSection(True)
+        box.addWidget(self.market_performance_table)
+
+        daily_title = QLabel("Daily prediction performance")
+        daily_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
+        box.addWidget(daily_title)
+        self.daily_performance_table = QTableWidget(0, 4)
+        self.daily_performance_table.setHorizontalHeaderLabels(["Prediction date", "Settled matches", "Correct markets", "Market accuracy"])
+        self.daily_performance_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.daily_performance_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.daily_performance_table.horizontalHeader().setStretchLastSection(True)
+        box.addWidget(self.daily_performance_table, 1)
+
+        refresh = QPushButton("Refresh performance")
+        refresh.clicked.connect(self.refresh_performance)
+        box.addWidget(refresh)
+        self.refresh_performance()
+        return page
+
+    def refresh_performance(self):
+        if not hasattr(self, "market_performance_table"):
+            return
+        records = self.store.performance_records()
+        settled = []
+        for created_at, status, outcomes_json in records:
+            if status != "settled" or not outcomes_json:
+                continue
+            try:
+                outcomes = json.loads(outcomes_json)
+            except (TypeError, ValueError):
+                continue
+            settled.append((created_at, outcomes))
+
+        total_correct = total_graded = 0
+        market_stats = {}
+        daily_stats = {}
+        for created_at, outcomes in settled:
+            date_key = (created_at or "Unknown")[:10]
+            day = daily_stats.setdefault(date_key, {"matches": 0, "correct": 0, "graded": 0})
+            day["matches"] += 1
+            for market_name, result in (outcomes.get("markets") or {}).items():
+                if not isinstance(result, dict) or "correct" not in result:
+                    continue
+                stats = market_stats.setdefault(market_name, {"correct": 0, "graded": 0})
+                stats["graded"] += 1
+                day["graded"] += 1
+                total_graded += 1
+                if bool(result["correct"]):
+                    stats["correct"] += 1
+                    day["correct"] += 1
+                    total_correct += 1
+
+        self.performance_saved_card.value_label.setText(str(len(records)))
+        self.performance_settled_card.value_label.setText(str(len(settled)))
+        accuracy = f"{(total_correct / total_graded):.1%}" if total_graded else "—"
+        self.performance_accuracy_card.value_label.setText(accuracy)
+
+        market_rows = sorted(market_stats.items(), key=lambda item: item[0])
+        self.market_performance_table.setRowCount(len(market_rows))
+        for row, (name, stats) in enumerate(market_rows):
+            values = [name, stats["graded"], stats["correct"],
+                      f"{stats['correct'] / stats['graded']:.1%}" if stats["graded"] else "—"]
+            for column, value in enumerate(values):
+                self.market_performance_table.setItem(row, column, QTableWidgetItem(str(value)))
+
+        daily_rows = sorted(daily_stats.items(), reverse=True)
+        self.daily_performance_table.setRowCount(len(daily_rows))
+        for row, (day, stats) in enumerate(daily_rows):
+            values = [day, stats["matches"], f"{stats['correct']} / {stats['graded']}",
+                      f"{stats['correct'] / stats['graded']:.1%}" if stats["graded"] else "—"]
+            for column, value in enumerate(values):
+                self.daily_performance_table.setItem(row, column, QTableWidgetItem(str(value)))
 
     def refresh_history(self):
         if not hasattr(self, "table"): return
@@ -720,6 +816,7 @@ class MainWindow(QMainWindow):
                     f"{row[4]:.2f}", f"{row[5]:.2f}", row[6], score, record]
             for j, value in enumerate(vals): self.table.setItem(i, j, QTableWidgetItem(str(value)))
         if hasattr(self, "saved_card"): self.saved_card.value_label.setText(str(len(rows)))
+        self.refresh_performance()
 
     def refresh_match_results(self):
         key = self.get_api_key()
