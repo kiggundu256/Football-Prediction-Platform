@@ -340,13 +340,12 @@ class MainWindow(QMainWindow):
         self.api_message.setText(f"Fetching recent form for {home_name} and {away_name}…")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            fixture_date = ((item.get('fixture') or {}).get('date') or '')[:10]
-            competition_season = (item.get('league') or {}).get('season')
+            fixture_date = ((item.get("fixture") or {}).get("date") or "")[:10]
             home_recent = fetch_recent_team_fixtures(
-                home_id, api_key=key, last=5, before_date=fixture_date, season=competition_season
+                home_id, api_key=key, last=5, before_date=fixture_date
             )
             away_recent = fetch_recent_team_fixtures(
-                away_id, api_key=key, last=5, before_date=fixture_date, season=competition_season
+                away_id, api_key=key, last=5, before_date=fixture_date
             )
         except ApiFootballError as exc:
             QMessageBox.warning(self, "Form data unavailable", str(exc))
@@ -355,40 +354,78 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
 
+        def matches_used(fixtures, team_id):
+            used = []
+            for match in fixtures:
+                goals = match.get("goals") or {}
+                match_teams = match.get("teams") or {}
+                match_home = match_teams.get("home") or {}
+                match_away = match_teams.get("away") or {}
+                hg, ag = goals.get("home"), goals.get("away")
+                if hg is None or ag is None:
+                    continue
+                if match_home.get("id") == team_id or match_away.get("id") == team_id:
+                    used.append(match)
+            return used
+
+        home_used = matches_used(home_recent, home_id)
+        away_used = matches_used(away_recent, away_id)
+
         def team_rates(fixtures, team_id):
             scored, conceded = [], []
             for match in fixtures:
                 goals = match.get("goals") or {}
-                hteam = (match.get("teams") or {}).get("home") or {}
-                ateam = (match.get("teams") or {}).get("away") or {}
+                match_teams = match.get("teams") or {}
+                match_home = match_teams.get("home") or {}
+                match_away = match_teams.get("away") or {}
                 hg, ag = goals.get("home"), goals.get("away")
-                if hg is None or ag is None:
-                    continue
-                if hteam.get("id") == team_id:
+                if match_home.get("id") == team_id:
                     scored.append(float(hg)); conceded.append(float(ag))
-                elif ateam.get("id") == team_id:
+                elif match_away.get("id") == team_id:
                     scored.append(float(ag)); conceded.append(float(hg))
             if not scored:
                 return None
             return sum(scored) / len(scored), sum(conceded) / len(conceded), len(scored)
 
-        hr = team_rates(home_recent, home_id)
-        ar = team_rates(away_recent, away_id)
+        hr = team_rates(home_used, home_id)
+        ar = team_rates(away_used, away_id)
         if not hr or not ar:
             QMessageBox.information(
                 self, "Not enough results",
-                "The provider did not return enough completed recent matches for both teams. "
+                "The provider did not return enough completed matches with scores for both teams. "
                 "Try another fixture or date."
             )
-            self.api_message.setText("Not enough completed recent results to calculate a form-based estimate.")
+            self.api_message.setText("Not enough completed results with scores to calculate a form-based estimate.")
             return
+
         home_xg = max(0.05, (hr[0] + ar[1]) / 2)
         away_xg = max(0.05, (ar[0] + hr[1]) / 2)
         markets = predict_markets(home_xg, away_xg)
+        fixture_info = {
+            "competition": (item.get("league") or {}).get("name", "Unknown"),
+            "home_team": home_name,
+            "away_team": away_name,
+        }
+        source_matches = (
+            [{"team_side": "home", "team_id": home_id, "match": match} for match in home_used]
+            + [{"team_side": "away", "team_id": away_id, "match": match} for match in away_used]
+        )
+        try:
+            prediction_id = self.store.save_analysis(
+                fixture_info, home_xg, away_xg, markets, source_matches
+            )
+        except sqlite3.Error as exc:
+            QMessageBox.critical(
+                self, "Could not save analysis",
+                f"The analysis was calculated, but its history could not be saved locally.\n{exc}"
+            )
+            return
+
         scores = ", ".join(f"{h}-{a} ({p:.1%})" for h, a, p in markets["top_scores"][:5])
         report = (
             f"{home_name} vs {away_name}\n\n"
-            f"Historical completed matches used (Free-plan seasons 2022–2024): {home_name} {hr[2]}, {away_name} {ar[2]} (up to 5 each)\n"
+            f"Historical completed matches used (Free-plan seasons 2022–2024): "
+            f"{home_name} {hr[2]}, {away_name} {ar[2]} (up to 5 each)\n"
             f"Average goals scored/conceded — {home_name}: {hr[0]:.2f}/{hr[1]:.2f}; "
             f"{away_name}: {ar[0]:.2f}/{ar[1]:.2f}\n\n"
             f"Form-based estimated goals: {home_name} {home_xg:.2f} — {away_xg:.2f} {away_name}\n"
@@ -397,12 +434,73 @@ class MainWindow(QMainWindow):
             f"Over 3.5 {markets['over']['3.5']:.1%}\n"
             f"BTTS Yes {markets['btts_yes']:.1%} | BTTS No {markets['btts_no']:.1%}\n"
             f"Top scorelines: {scores}\n\n"
-            "DATA LIMITATION: Free-plan historical seasons 2022–2024 are used; this is not current-season form.\n""EARLY BASELINE: uses historical goals only, not opponent strength, home advantage, injuries, lineups, "
+            "DATA LIMITATION: Free-plan historical seasons 2022–2024 are used; this is not current-season form.\n"
+            "EARLY BASELINE: uses historical goals only, not opponent strength, home advantage, injuries, lineups, "
             "corners or referee/weather data. Probabilities are experimental and are not validated betting advice."
         )
-        self.api_message.setText(f"Analysis ready for {home_name} vs {away_name}. Review the report.")
-        QMessageBox.information(self, "Early form-based analysis", report)
+        self.api_message.setText(
+            f"Analysis ready and saved (#{prediction_id}) for {home_name} vs {away_name}. "
+            f"{len(home_used)} home-team and {len(away_used)} away-team source matches stored."
+        )
+        self.refresh_history()
+        self.show_analysis_dialog(
+            report, prediction_id, home_name, away_name,
+            self.store.source_matches(prediction_id, "home"),
+            self.store.source_matches(prediction_id, "away")
+        )
 
+    def show_analysis_dialog(self, report, prediction_id, home_name, away_name, home_rows, away_rows):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Match Analysis — {home_name} vs {away_name}")
+        dialog.resize(1050, 760)
+        layout = QVBoxLayout(dialog)
+        summary = QLabel(report)
+        summary.setWordWrap(True)
+        summary.setStyleSheet("background:white;padding:14px;border-radius:8px")
+        layout.addWidget(summary)
+
+        heading = QLabel(f"Historical matches used • Analysis #{prediction_id}")
+        heading.setStyleSheet("font-size:16px;font-weight:700;color:#173b70")
+        layout.addWidget(heading)
+        tables = QHBoxLayout()
+
+        def add_team_table(title, rows):
+            panel = QVBoxLayout()
+            label = QLabel(f"{title} — {len(rows)} matches")
+            label.setStyleSheet("font-weight:700")
+            panel.addWidget(label)
+            table = QTableWidget(len(rows), 6)
+            table.setHorizontalHeaderLabels(
+                ["Date", "Competition", "Venue", "Opponent", "Score", "Result"]
+            )
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            table.horizontalHeader().setStretchLastSection(True)
+            for row_index, record in enumerate(rows):
+                (_side, _fixture_id, match_date, competition, home_team, away_team,
+                 home_goals, away_goals, venue, opponent, result) = record
+                score = (
+                    f"{home_goals}–{away_goals}"
+                    if home_goals is not None and away_goals is not None else "—"
+                )
+                values = [match_date, competition, venue, opponent, score, result]
+                for column, value in enumerate(values):
+                    cell = QTableWidgetItem(str(value))
+                    if column == 5:
+                        cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    table.setItem(row_index, column, cell)
+            table.resizeColumnsToContents()
+            panel.addWidget(table)
+            tables.addLayout(panel, 1)
+
+        add_team_table(home_name, home_rows)
+        add_team_table(away_name, away_rows)
+        layout.addLayout(tables, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def analysis(self):
         page = QWidget(); box = QVBoxLayout(page); form = QFormLayout()
