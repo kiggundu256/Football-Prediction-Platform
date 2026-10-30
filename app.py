@@ -267,8 +267,9 @@ class MainWindow(QMainWindow):
         self.api_message.setText(f"Fetching recent form for {home_name} and {away_name}…")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            home_recent = fetch_recent_team_fixtures(home_id, api_key=key, last=5)
-            away_recent = fetch_recent_team_fixtures(away_id, api_key=key, last=5)
+            fixture_date = ((item.get('fixture') or {}).get('date') or '')[:10]
+            home_recent = fetch_recent_team_fixtures(home_id, api_key=key, last=5, before_date=fixture_date)
+            away_recent = fetch_recent_team_fixtures(away_id, api_key=key, last=5, before_date=fixture_date)
         except ApiFootballError as exc:
             QMessageBox.warning(self, "Form data unavailable", str(exc))
             self.api_message.setText(str(exc))
