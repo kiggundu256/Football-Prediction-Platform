@@ -816,7 +816,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Select a match", "Select a fixture first.")
             return
         if self.fixture_data_mode == "demo":
-            self.match_intelligence.setText("DEMO DATA — no real injuries, lineups, weather or corner statistics are attached.")
+            self.match_intelligence.setText(
+                "DEMO DATA — no real injuries, lineups, weather or corner statistics are attached."
+            )
             return
         fixture = item.get("fixture") or {}
         fixture_id = fixture.get("id")
@@ -827,66 +829,66 @@ class MainWindow(QMainWindow):
         if not key:
             QMessageBox.information(self, "API key needed", "Set your API key before loading match intelligence.")
             return
+
         teams = item.get("teams") or {}
-        home = teams.get("home") or {}
-        away = teams.get("away") or {}
-        home_id, away_id = home.get("id"), away.get("id")
+        home_id = (teams.get("home") or {}).get("id")
+        away_id = (teams.get("away") or {}).get("id")
         match_date = (fixture.get("date") or "")[:10]
+        notes = []
+        quota_exhausted = False
+
+        def optional_data(label, cache_key, fetcher, ttl):
+            nonlocal quota_exhausted
+            if quota_exhausted:
+                return None
+            try:
+                return self.cached_provider_data(cache_key, fetcher, ttl)
+            except ApiFootballError as exc:
+                notes.append(f"{label} unavailable: {exc}")
+                message = str(exc).lower()
+                if "limit" in message or "quota" in message or "too many requests" in message:
+                    quota_exhausted = True
+                return None
+
         self.intelligence_button.setEnabled(False)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        notes = []
-        injuries, lineups, weather, corner_averages = [], [], None, None
+        injuries = lineups = weather = corner_averages = None
         try:
-            try:
-                injuries = self.cached_provider_data(
-                    f"injuries:{fixture_id}",
-                    lambda: fetch_fixture_injuries(fixture_id, api_key=key), 30 * 60
-                )
-            except ApiFootballError as exc:
-                notes.append(f"Injuries unavailable: {exc}")
-            try:
-                lineups = self.cached_provider_data(
-                    f"lineups:{fixture_id}",
-                    lambda: fetch_fixture_lineups(fixture_id, api_key=key), 10 * 60
-                )
-            except ApiFootballError as exc:
-                notes.append(f"Lineups unavailable: {exc}")
+            injuries = optional_data(
+                "Injuries", f"injuries:{fixture_id}",
+                lambda: fetch_fixture_injuries(fixture_id, api_key=key), 30 * 60
+            )
+            lineups = optional_data(
+                "Lineups", f"lineups:{fixture_id}",
+                lambda: fetch_fixture_lineups(fixture_id, api_key=key), 10 * 60
+            )
 
             venue = fixture.get("venue") or {}
-            venue_data = None
-            if venue.get("id"):
-                try:
-                    venue_data = self.cached_provider_data(
-                        f"venue:{venue['id']}",
-                        lambda: fetch_venue_details(venue["id"], api_key=key),
-                        30 * 24 * 60 * 60,
-                    )
-                except ApiFootballError as exc:
-                    notes.append(f"Venue details unavailable: {exc}")
+            venue_data = optional_data(
+                "Venue", f"venue:{venue.get('id')}",
+                lambda: fetch_venue_details(venue.get("id"), api_key=key),
+                30 * 24 * 60 * 60,
+            ) if venue.get("id") else None
             venue_data = venue_data or {}
             latitude, longitude = venue_data.get("latitude"), venue_data.get("longitude")
-            if latitude is not None and longitude is not None and fixture.get("date"):
-                weather = self.cached_provider_data(
-                    f"weather:{latitude}:{longitude}:{match_date}",
+            if not quota_exhausted and latitude is not None and longitude is not None and fixture.get("date"):
+                weather = optional_data(
+                    "Weather", f"weather:{latitude}:{longitude}:{match_date}",
                     lambda: fetch_match_weather(latitude, longitude, fixture["date"]),
                     60 * 60,
                 )
-            else:
+            elif latitude is None or longitude is None:
                 notes.append("Weather unavailable: venue coordinates were not supplied.")
 
             recent = {}
             for side, team_id in (("home", home_id), ("away", away_id)):
-                try:
-                    recent[side] = self.cached_provider_data(
-                        f"team_recent:{team_id}:{match_date}:5",
-                        lambda tid=team_id: fetch_recent_team_fixtures(
-                            tid, api_key=key, last=5, before_date=match_date
-                        ),
-                        7 * 24 * 60 * 60,
-                    )
-                except ApiFootballError as exc:
-                    recent[side] = []
-                    notes.append(f"{side.title()} history unavailable: {exc}")
+                recent[side] = optional_data(
+                    f"{side.title()} history", f"team_recent:{team_id}:{match_date}:5",
+                    lambda tid=team_id: fetch_recent_team_fixtures(
+                        tid, api_key=key, last=5, before_date=match_date
+                    ),
+                    7 * 24 * 60 * 60,
+                ) or []
 
             corner_data = {"home_for": [], "home_against": [], "away_for": [], "away_against": []}
             for side, team_id, fixtures in (
@@ -894,6 +896,8 @@ class MainWindow(QMainWindow):
                 ("away", away_id, recent.get("away", [])),
             ):
                 for old_match in fixtures[:3]:
+                    if quota_exhausted:
+                        break
                     old_fixture = old_match.get("fixture") or {}
                     old_id = old_fixture.get("id")
                     old_teams = old_match.get("teams") or {}
@@ -901,20 +905,19 @@ class MainWindow(QMainWindow):
                     opponent_id = old_away.get("id") if old_home.get("id") == team_id else old_home.get("id")
                     if not old_id or not opponent_id:
                         continue
-                    try:
-                        stats = self.cached_provider_data(
-                            f"corners:{old_id}",
-                            lambda fid=old_id: fetch_fixture_corner_statistics(fid, api_key=key),
-                            30 * 24 * 60 * 60,
-                        )
-                    except ApiFootballError as exc:
-                        notes.append(f"Some historical corner data unavailable: {exc}")
+                    stats = optional_data(
+                        "Historical corner statistics", f"corners:{old_id}",
+                        lambda fid=old_id: fetch_fixture_corner_statistics(fid, api_key=key),
+                        30 * 24 * 60 * 60,
+                    )
+                    if not isinstance(stats, dict):
                         continue
                     own = stats.get(str(team_id), stats.get(team_id))
                     against = stats.get(str(opponent_id), stats.get(opponent_id))
                     if own is not None and against is not None:
                         corner_data[f"{side}_for"].append(float(own))
                         corner_data[f"{side}_against"].append(float(against))
+
             if all(len(corner_data[f"{side}_for"]) >= 2 for side in ("home", "away")):
                 corner_averages = {
                     key_name: sum(values) / len(values)
@@ -923,26 +926,32 @@ class MainWindow(QMainWindow):
                 self.store.save_provider_cache(f"corner_averages:{fixture_id}", corner_averages)
             else:
                 notes.append("Corner predictions need at least two observed historical matches for each team.")
+            if quota_exhausted:
+                notes.append("Provider quota limit detected; further provider calls were stopped for this action.")
         finally:
             QApplication.restoreOverrideCursor()
             self.intelligence_button.setEnabled(True)
 
-        injury_text = summarize_injuries(injuries)
-        lineup_text = summarize_lineups(lineups)
+        injury_text = summarize_injuries(injuries) if injuries is not None else "Not loaded"
+        lineup_text = summarize_lineups(lineups) if lineups is not None else "Not loaded"
         referee = fixture.get("referee") or "Not supplied"
         weather_text = (
             f"{weather.get('temperature_c', '—')}°C, rain chance "
             f"{weather.get('precipitation_probability', '—')}%, wind "
             f"{weather.get('wind_speed_kmh', '—')} km/h"
-            if weather else "Unavailable"
+            if isinstance(weather, dict) else "Unavailable"
         )
         corner_text = "Loaded" if corner_averages else "Insufficient / unavailable"
         self.match_intelligence.setText(
             f"Injuries: {injury_text}  •  Lineups: {lineup_text}  •  Referee: {referee}  •  "
             f"Weather: {weather_text}  •  Corner data: {corner_text}"
-            + (("\n" + "\n".join(notes[:4])) if notes else "")
+            + (("\\n" + "\\n".join(notes[:5])) if notes else "")
         )
-        self.api_message.setText("Match intelligence loaded. Cached data will be reused; review unavailable items.")
+        self.api_message.setText(
+            "API quota limit detected; remaining optional calls were stopped. Cached data remains available."
+            if quota_exhausted else
+            "Match intelligence loaded. Cached data will be reused; review unavailable items."
+        )
         self.update_api_status()
 
     def analyze_selected_fixture(self):
@@ -1053,6 +1062,18 @@ class MainWindow(QMainWindow):
             "weather": weather_data is not None,
             "corners": corner_averages is not None,
         }
+        context_summary = [
+            "Injuries: " + (summarize_injuries(injuries_data) if injuries_data is not None else "Not loaded"),
+            "Expected lineups: " + (summarize_lineups(lineups_data) if lineups_data is not None else "Not loaded"),
+            "Referee: " + (selected_fixture_data.get("referee") or "Not supplied"),
+            "Weather: " + (
+                f"{weather_data.get('temperature_c', '—')}°C; rain chance "
+                f"{weather_data.get('precipitation_probability', '—')}%; wind "
+                f"{weather_data.get('wind_speed_kmh', '—')} km/h"
+                if isinstance(weather_data, dict) else "Not loaded / unavailable"
+            ),
+            "Corner history: " + ("Loaded" if corner_averages else "Not loaded / insufficient coverage"),
+        ]
         ensemble = predict_ensemble(
             hr, ar, ml_probabilities=ml_probabilities,
             ml_samples=local_ml["samples"] if local_ml else 0,
@@ -1143,14 +1164,15 @@ class MainWindow(QMainWindow):
             h2h_error, competition=fixture_info["competition"],
             home_profile=hr, away_profile=ar, home_xg=home_xg,
             away_xg=away_xg, markets=markets, explanation=explanation,
-            model_quality=ensemble["model_quality"]
+            model_quality=ensemble["model_quality"], context_summary=context_summary
         )
 
     def show_analysis_dialog(
         self, report, prediction_id, home_name, away_name, home_rows,
         away_rows, h2h_rows, h2h_error=None, *, competition="",
         home_profile=None, away_profile=None, home_xg=0.0,
-        away_xg=0.0, markets=None, explanation=None, model_quality=None
+        away_xg=0.0, markets=None, explanation=None, model_quality=None,
+        context_summary=None
     ):
         """Show the forecast as a structured, selectable analytics report."""
         dialog = QDialog(self)
@@ -1311,6 +1333,26 @@ class MainWindow(QMainWindow):
             quality_text.setTextInteractionFlags(selectable)
             quality_text.setStyleSheet("background:#111D30;padding:12px;border:1px solid #26364D;border-radius:8px")
             layout.addWidget(quality_text)
+
+            section_title("MATCH INTELLIGENCE FACTORS")
+            context_panel = panel()
+            context_layout = QVBoxLayout(context_panel)
+            context_layout.setContentsMargins(14, 12, 14, 12)
+            for item in (context_summary or ["Injuries, lineups, referee, weather and corners: not loaded"]):
+                label = QLabel(item)
+                label.setWordWrap(True)
+                label.setTextInteractionFlags(selectable)
+                label.setStyleSheet("color:#D7E3F5;border:0;padding:3px")
+                context_layout.addWidget(label)
+            caution = QLabel(
+                "These factors are shown as match context and influence the data-coverage confidence. "
+                "Their numerical effects are not yet weighted until validated through historical backtesting."
+            )
+            caution.setWordWrap(True)
+            caution.setTextInteractionFlags(selectable)
+            caution.setStyleSheet("color:#F5D58A;border:0;padding:4px")
+            context_layout.addWidget(caution)
+            layout.addWidget(context_panel)
 
             section_title("MOST LIKELY SCORELINES")
             score_panel = panel()
