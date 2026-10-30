@@ -26,7 +26,10 @@ def fetch_match_weather(latitude, longitude, kickoff, timeout=15):
         return None
 
     now = datetime.now(timezone.utc)
-    endpoint = ARCHIVE_URL if kickoff_dt.date() < now.date() else FORECAST_URL
+    days_ahead = (kickoff_dt.date() - now.date()).days
+    if days_ahead > 15:
+        return None
+    endpoint = ARCHIVE_URL if days_ahead < 0 else FORECAST_URL
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -53,7 +56,6 @@ def fetch_match_weather(latitude, longitude, kickoff, timeout=15):
     if not times:
         return None
     target = kickoff_dt.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    target_key = target.strftime("%Y-%m-%dT%H:00")
     index = min(range(len(times)), key=lambda i: abs(
         datetime.fromisoformat(times[i]).replace(tzinfo=timezone.utc) - target
     ))

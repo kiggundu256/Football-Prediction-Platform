@@ -1334,6 +1334,30 @@ class MainWindow(QMainWindow):
             quality_text.setStyleSheet("background:#111D30;padding:12px;border:1px solid #26364D;border-radius:8px")
             layout.addWidget(quality_text)
 
+            section_title("MODEL COMPARISON")
+            components = markets.get("model_components", {})
+            component_rows = [
+                ("Goal distribution (Poisson)", components.get("goal_distribution")),
+                ("Recent-form strength", components.get("recent_form")),
+                ("Trained local ML", components.get("trained_machine_learning")),
+            ]
+            component_rows = [(name, values) for name, values in component_rows if values]
+            comparison_table = QTableWidget(len(component_rows), 4)
+            comparison_table.setHorizontalHeaderLabels(["Model", home_name, "Draw", away_name])
+            comparison_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            comparison_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            for row_index, (name, values) in enumerate(component_rows):
+                row_values = [
+                    name,
+                    f"{values.get('home_win', 0):.1%}",
+                    f"{values.get('draw', 0):.1%}",
+                    f"{values.get('away_win', 0):.1%}",
+                ]
+                for column, value in enumerate(row_values):
+                    comparison_table.setItem(row_index, column, QTableWidgetItem(str(value)))
+            comparison_table.horizontalHeader().setStretchLastSection(True)
+            layout.addWidget(comparison_table)
+
             section_title("MATCH INTELLIGENCE FACTORS")
             context_panel = panel()
             context_layout = QVBoxLayout(context_panel)
@@ -1633,6 +1657,18 @@ class MainWindow(QMainWindow):
         self.daily_performance_table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.daily_performance_table, 1)
 
+        model_title = QLabel("Model comparison and probability quality")
+        model_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
+        box.addWidget(model_title)
+        self.model_performance_table = QTableWidget(0, 4)
+        self.model_performance_table.setHorizontalHeaderLabels([
+            "Model version", "Settled matches", "Brier score", "Log loss"
+        ])
+        self.model_performance_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.model_performance_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.model_performance_table.horizontalHeader().setStretchLastSection(True)
+        box.addWidget(self.model_performance_table)
+
         refresh = QPushButton("Refresh performance")
         refresh.clicked.connect(self.refresh_performance)
         box.addWidget(refresh)
@@ -1672,6 +1708,16 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 self.daily_performance_table.setItem(row, column, QTableWidgetItem(str(value)))
+
+        model_rows = sorted(summary.get("by_model", {}).items())
+        self.model_performance_table.setRowCount(len(model_rows))
+        for row, (model_name, stats) in enumerate(model_rows):
+            values = [
+                model_name, stats["matches"], f"{stats['brier_score']:.3f}",
+                f"{stats['log_loss']:.3f}",
+            ]
+            for column, value in enumerate(values):
+                self.model_performance_table.setItem(row, column, QTableWidgetItem(str(value)))
 
     def refresh_history(self):
         if not hasattr(self, "table"): return
