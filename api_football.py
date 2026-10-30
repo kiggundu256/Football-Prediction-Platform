@@ -288,3 +288,77 @@ def fetch_head_to_head_fixtures(home_team_id, away_team_id, api_key=None, before
             break
     completed.sort(key=lambda item: (item.get("fixture") or {}).get("date", ""), reverse=True)
     return completed[:max(1, int(limit))]
+
+def _fetch_fixture_context(endpoint, fixture_id, api_key=None, timeout=20):
+    """Shared safe reader for fixture-specific optional context endpoints."""
+    key = api_key or os.environ.get("API_FOOTBALL_KEY")
+    if not key:
+        raise ApiFootballError("API key is missing. Enter it in the app settings.")
+    if not fixture_id:
+        raise ApiFootballError("A valid fixture ID is required.")
+    try:
+        response = _tracked_get(
+            f"{BASE_URL}/{endpoint}",
+            headers={"x-apisports-key": key},
+            params={"fixture": int(fixture_id)},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise ApiFootballError(f"Could not reach API-Football: {exc.__class__.__name__}") from None
+    if response.status_code in (401, 403):
+        raise ApiFootballError("API-Football rejected the key or plan access. Check the dashboard and subscription.")
+    if response.status_code == 429:
+        raise ApiFootballError("API-Football request limit reached. Try again later.")
+    if not response.ok:
+        raise ApiFootballError(f"API-Football returned HTTP {response.status_code}.")
+    try:
+        payload = response.json()
+    except ValueError:
+        raise ApiFootballError("API-Football returned an unreadable response.") from None
+    errors = payload.get("errors")
+    if errors:
+        raise ApiFootballError(_format_provider_errors(errors))
+    return payload.get("response", [])
+
+
+def fetch_fixture_injuries(fixture_id, api_key=None, timeout=20):
+    """Fetch injury and suspension reports attached to a fixture."""
+    return _fetch_fixture_context("injuries", fixture_id, api_key, timeout)
+
+
+def fetch_fixture_lineups(fixture_id, api_key=None, timeout=20):
+    """Fetch announced starting lineups and formations for a fixture."""
+    return _fetch_fixture_context("fixtures/lineups", fixture_id, api_key, timeout)
+
+
+def fetch_venue_details(venue_id, api_key=None, timeout=20):
+    """Fetch venue metadata, including coordinates when the provider supplies them."""
+    key = api_key or os.environ.get("API_FOOTBALL_KEY")
+    if not key:
+        raise ApiFootballError("API key is missing. Enter it in the app settings.")
+    if not venue_id:
+        raise ApiFootballError("A valid venue ID is required.")
+    try:
+        response = _tracked_get(
+            f"{BASE_URL}/venues",
+            headers={"x-apisports-key": key},
+            params={"id": int(venue_id)},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise ApiFootballError(f"Could not reach API-Football: {exc.__class__.__name__}") from None
+    if response.status_code in (401, 403):
+        raise ApiFootballError("API-Football rejected the key or plan access. Check the dashboard and subscription.")
+    if response.status_code == 429:
+        raise ApiFootballError("API-Football request limit reached. Try again later.")
+    if not response.ok:
+        raise ApiFootballError(f"API-Football returned HTTP {response.status_code}.")
+    try:
+        payload = response.json()
+    except ValueError:
+        raise ApiFootballError("API-Football returned an unreadable response.") from None
+    errors = payload.get("errors")
+    if errors:
+        raise ApiFootballError(_format_provider_errors(errors))
+    venues = payload.get("response", [])
+    return venues[0] if venues else None

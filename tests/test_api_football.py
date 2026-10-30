@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 import requests
-from api_football import (ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures, fetch_fixture_by_id, fetch_fixture_corner_statistics)
+from api_football import (ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures, fetch_fixture_by_id, fetch_fixture_corner_statistics, fetch_fixture_injuries, fetch_fixture_lineups, fetch_venue_details)
 
 
 class ApiFootballTests(unittest.TestCase):
@@ -102,6 +102,26 @@ class ApiFootballTests(unittest.TestCase):
         response.json.return_value = {"response": [], "errors": []}
         get.return_value = response
         self.assertEqual(fetch_fixture_corner_statistics(123, api_key="test-key"), {})
+
+
+    @patch("api_football.requests.get")
+    def test_fetches_fixture_injuries_and_lineups(self, get):
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = {"response": [{"player": {"name": "Test Player"}}], "errors": []}
+        get.return_value = response
+        self.assertEqual(fetch_fixture_injuries(123, api_key="test-key")[0]["player"]["name"], "Test Player")
+        self.assertEqual(get.call_args.kwargs["params"], {"fixture": 123})
+        fetch_fixture_lineups(123, api_key="test-key")
+        self.assertTrue(get.call_args.args[0].endswith("/fixtures/lineups"))
+
+    @patch("api_football.requests.get")
+    def test_fetches_venue_coordinates(self, get):
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = {"response": [{"id": 9, "latitude": "0.31", "longitude": "32.58"}], "errors": []}
+        get.return_value = response
+        venue = fetch_venue_details(9, api_key="test-key")
+        self.assertEqual(venue["latitude"], "0.31")
+        self.assertEqual(get.call_args.kwargs["params"], {"id": 9})
 
 if __name__ == "__main__":
     unittest.main()
