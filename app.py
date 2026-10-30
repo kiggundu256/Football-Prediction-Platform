@@ -12,7 +12,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QPushButton, QSpinBox, QTabWidget, QTableWidget,
+    QMessageBox, QPushButton, QScrollArea, QSpinBox, QTabWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget
 )
 from api_football import ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures
@@ -486,7 +486,13 @@ class MainWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Match Analysis — {home_name} vs {away_name}")
         dialog.resize(1050, 760)
-        layout = QVBoxLayout(dialog)
+        outer_layout = QVBoxLayout(dialog)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        scroll.setWidget(content)
+        outer_layout.addWidget(scroll)
         summary = QLabel(report)
         summary.setWordWrap(True)
         summary.setStyleSheet("background:#111D30;padding:14px;border:1px solid #26364D;border-radius:8px")
@@ -589,7 +595,7 @@ class MainWindow(QMainWindow):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dialog.reject)
         buttons.accepted.connect(dialog.accept)
-        layout.addWidget(buttons)
+        outer_layout.addWidget(buttons)
         enable_text_selection(dialog)
         dialog.exec()
 
