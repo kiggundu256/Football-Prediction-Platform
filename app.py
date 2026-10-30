@@ -315,7 +315,7 @@ class MainWindow(QMainWindow):
         head.addWidget(title); head.addStretch()
         head.addWidget(QLabel("Local-first • Forecast history • Performance tracking"))
         outer.addLayout(head)
-        self.warning = QLabel("DEMO MODE: sample predictions are illustrative. Live fixtures can be loaded in the Live Fixtures tab.")
+        self.warning = QLabel("Forecasts are estimates, not guarantees. Demo fixtures are illustrative; real-match analysis requires provider data.")
         self.warning.setWordWrap(True)
         self.warning.setStyleSheet("background:#302817;color:#F5B942;padding:10px;border:1px solid #725521;border-radius:7px")
         outer.addWidget(self.warning)
@@ -1405,10 +1405,11 @@ class MainWindow(QMainWindow):
             layout.addWidget(explanation_panel)
 
             coverage = QLabel(
-                "DATA LIMITATION  •  The baseline uses up to five completed historical "
-                "matches per team from the accessible 2022–2024 seasons. It does not yet "
-                "adjust for current-season form, opponent strength, injuries, confirmed "
-                "lineups, corners, referee or weather."
+                "DATA COVERAGE  •  Goal probabilities combine the Poisson goal distribution "
+                "and recent-form strength using up to five accessible completed matches per team. "
+                "Corner markets are calculated separately when historical corner statistics are available. "
+                "Injuries, lineups, referee and weather are shown as context and influence coverage confidence; "
+                "their numerical effects are not weighted until validated through backtesting."
             )
             coverage.setWordWrap(True)
             coverage.setStyleSheet(

@@ -92,7 +92,10 @@ def build_analysis_explanation(home_name, away_name, home, away, home_xg, away_x
         f"• Goals reading: {goal_read} Over 1.5: {markets['over']['1.5']:.1%}; "
         f"Over 2.5: {markets['over']['2.5']:.1%}; Over 3.5: {markets['over']['3.5']:.1%}.",
         f"• Both teams to score: Yes {markets['btts_yes']:.1%}; No {markets['btts_no']:.1%}.",
-        "HOW TO READ THIS: These are model probabilities generated from a small historical sample, not guarantees. "
-        "The current baseline does not adjust for opponent strength, venue-specific form, current-season changes, "
-        "injuries, lineups, corners, referee or weather. Treat it as an early statistical reference, not betting advice.",
+        "HOW TO READ THIS: These are model probabilities generated from a limited historical sample, not guarantees. "
+        "The 1X2 ensemble combines a Poisson goal model and recent-form strength; a locally trained model joins "
+        "only after enough verified settled examples exist. Corner markets are calculated separately when observed "
+        "corner history is available. Injury, lineup, referee and weather data are displayed as context and inform "
+        "data-coverage confidence; their numerical effects await chronological validation. Treat forecasts as "
+        "estimates, not betting advice.",
     ]
