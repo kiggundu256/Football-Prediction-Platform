@@ -1,5 +1,6 @@
 """Small API-Football client. Never logs or embeds API credentials."""
 import os
+from datetime import date, timedelta
 import requests
 
 BASE_URL = "https://v3.football.api-sports.io"
@@ -58,18 +59,25 @@ def _format_provider_errors(errors):
     return f"API-Football request error: {message[:600]}"
 
 
-def fetch_recent_team_fixtures(team_id, api_key=None, last=5, timeout=20):
-    """Fetch a team's most recent fixtures for basic form analysis."""
-    key = api_key or os.environ.get("API_FOOTBALL_KEY")
+def fetch_recent_team_fixtures(team_id, api_key=None, last=5, before_date=None, timeout=20):
+    """Fetch recent completed team fixtures using a free-plan-compatible date range."""
+    key = api_key or os.environ.get('API_FOOTBALL_KEY')
     if not key:
         raise ApiFootballError("API key is missing. Enter it in the app settings.")
     if not team_id:
         raise ApiFootballError("A valid team ID is required.")
     try:
+        end_date = date.fromisoformat(before_date) if before_date else date.today()
+    except (TypeError, ValueError):
+        raise ApiFootballError("The selected fixture has an invalid date.") from None
+    end_date -= timedelta(days=1)
+    start_date = end_date - timedelta(days=180)
+    params = {'team': int(team_id), 'from': start_date.isoformat(), 'to': end_date.isoformat()}
+    try:
         response = requests.get(
-            f"{BASE_URL}/fixtures",
-            headers={"x-apisports-key": key},
-            params={"team": int(team_id), "last": int(last)},
+            f'{BASE_URL}/fixtures',
+            headers={'x-apisports-key': key},
+            params=params,
             timeout=timeout,
         )
     except requests.RequestException as exc:
@@ -84,7 +92,12 @@ def fetch_recent_team_fixtures(team_id, api_key=None, last=5, timeout=20):
         payload = response.json()
     except ValueError:
         raise ApiFootballError("API-Football returned an unreadable response.") from None
-    errors = payload.get("errors")
+    errors = payload.get('errors')
     if errors:
         raise ApiFootballError(_format_provider_errors(errors))
-    return payload.get("response", [])
+    completed = [
+        match for match in payload.get('response', [])
+        if ((match.get('fixture') or {}).get('status') or {}).get('short') in {'FT', 'AET', 'PEN'}
+    ]
+    completed.sort(key=lambda match: (match.get('fixture') or {}).get('date', ''), reverse=True)
+    return completed[:max(1, int(last))]
