@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 import requests
-from api_football import ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures
+from api_football import ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures, fetch_fixture_by_id
 
 
 class ApiFootballTests(unittest.TestCase):
@@ -67,6 +67,17 @@ class ApiFootballTests(unittest.TestCase):
         self.assertNotIn("to", params)
         self.assertNotIn("last", params)
 
+ 
+    @patch("api_football.requests.get")
+    def test_fetches_fixture_by_id_for_settlement(self, get):
+        response = Mock()
+        response.ok = True
+        response.status_code = 200
+        response.json.return_value = {"response": [{"fixture": {"id": 987}}], "errors": []}
+        get.return_value = response
+        result = fetch_fixture_by_id(987, api_key="test-key")
+        self.assertEqual(result["fixture"]["id"], 987)
+        self.assertEqual(get.call_args.kwargs["params"], {"id": 987})
 
 if __name__ == "__main__":
     unittest.main()
