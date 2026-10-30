@@ -11,7 +11,7 @@ from api_usage import record_api_request
 def _tracked_get(url, **kwargs):
     """Count every provider HTTP attempt, including multi-season fallback calls."""
     record_api_request(url.rsplit("/", 1)[-1])
-    return _tracked_get(url, **kwargs)
+    return requests.get(url, **kwargs)
 
 
 class ApiFootballError(RuntimeError):
