@@ -92,6 +92,15 @@ class Store:
             db.execute("""UPDATE prediction_runs SET result_status =
                 CASE WHEN is_demo = 1 THEN 'demo' ELSE 'unlinked' END
                 WHERE result_status = 'unlinked'""")
+            db.execute("""CREATE TABLE IF NOT EXISTS fixture_cache (
+                fixture_date TEXT PRIMARY KEY,
+                fixtures_json TEXT NOT NULL,
+                cached_at_utc TEXT NOT NULL
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS api_fixture_request_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                requested_at_utc TEXT NOT NULL
+            )""")
 
 
     def connect(self):
@@ -190,6 +199,34 @@ class Store:
                 home_xg, away_xg, result_status, actual_home_goals, actual_away_goals,
                 outcomes_json FROM prediction_runs ORDER BY id DESC LIMIT 200""").fetchall()
 
+    def save_fixture_cache(self, fixture_date, fixtures):
+        """Save provider fixtures locally, keyed by the requested date."""
+        with self.connect() as db:
+            db.execute("""INSERT INTO fixture_cache (fixture_date, fixtures_json, cached_at_utc)
+                VALUES (?, ?, ?) ON CONFLICT(fixture_date) DO UPDATE SET
+                fixtures_json = excluded.fixtures_json, cached_at_utc = excluded.cached_at_utc""",
+                (fixture_date, json.dumps(fixtures), datetime.now(timezone.utc).isoformat()))
+
+    def get_fixture_cache(self, fixture_date):
+        """Return (fixtures, cached_at_utc), or None when this date is not cached."""
+        with self.connect() as db:
+            row = db.execute("""SELECT fixtures_json, cached_at_utc FROM fixture_cache
+                WHERE fixture_date = ?""", (fixture_date,)).fetchone()
+        return (json.loads(row[0]), row[1]) if row else None
+
+    def record_fixture_request(self):
+        """Record one locally initiated fixture-list request (not provider quota)."""
+        with self.connect() as db:
+            db.execute("INSERT INTO api_fixture_request_log (requested_at_utc) VALUES (?)",
+                       (datetime.now(timezone.utc).isoformat(),))
+
+    def fixture_requests_today(self):
+        """Count this app's fixture-list request attempts since UTC midnight."""
+        today = datetime.now(timezone.utc).date().isoformat()
+        with self.connect() as db:
+            return db.execute("""SELECT COUNT(*) FROM api_fixture_request_log
+                WHERE substr(requested_at_utc, 1, 10) = ?""", (today,)).fetchone()[0]
+
     def predicted_fixture_ids(self):
         """Return provider fixture IDs that already have a saved real prediction."""
         with self.connect() as db:
@@ -260,6 +297,8 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.tabs); self.setCentralWidget(root)
         self.refresh_history()
         self.update_api_status()
+        if hasattr(self, "api_usage_label"):
+            self.update_api_status()
         enable_text_selection(self)
 
     def dashboard(self):
@@ -347,9 +386,17 @@ class MainWindow(QMainWindow):
         self.fixture_date.setCalendarPopup(True)
         self.fixture_date.setDisplayFormat("yyyy-MM-dd")
         controls.addWidget(self.fixture_date)
-        self.load_fixtures_button = QPushButton("Load Fixtures")
+        self.load_fixtures_button = QPushButton("Load / Use Cached")
+        self.load_fixtures_button.setToolTip("Load saved fixtures for this date; fetch only if no local copy exists.")
         self.load_fixtures_button.clicked.connect(self.load_live_fixtures)
         controls.addWidget(self.load_fixtures_button)
+        self.refresh_fixtures_button = QPushButton("Refresh from API")
+        self.refresh_fixtures_button.setToolTip("Make a new API-Football request and replace the local cache.")
+        self.refresh_fixtures_button.clicked.connect(lambda: self.load_live_fixtures(force_refresh=True))
+        controls.addWidget(self.refresh_fixtures_button)
+        self.demo_fixtures_button = QPushButton("Load Demo Fixtures")
+        self.demo_fixtures_button.clicked.connect(self.load_demo_fixtures)
+        controls.addWidget(self.demo_fixtures_button)
         self.analyze_fixture_button = QPushButton("Analyze Selected Match")
         self.analyze_fixture_button.clicked.connect(self.analyze_selected_fixture)
         controls.addWidget(self.analyze_fixture_button)
@@ -377,12 +424,17 @@ class MainWindow(QMainWindow):
         self.fixture_summary = QLabel("No fixtures loaded yet.")
         self.fixture_summary.setStyleSheet("color:#94A9C7;font-weight:600;padding:4px 1px")
         box.addWidget(self.fixture_summary)
-        self.api_message = QLabel("API not tested yet. Set your key, then load fixtures.")
+        self.api_message = QLabel("Fixtures can be loaded from your local cache, demo data, or API-Football.")
         self.api_message.setWordWrap(True)
         box.addWidget(self.api_message)
+        self.api_usage_label = QLabel("")
+        self.api_usage_label.setWordWrap(True)
+        self.api_usage_label.setStyleSheet("color:#94A9C7;font-size:11px;padding:2px")
+        box.addWidget(self.api_usage_label)
 
         self.live_fixtures = []
         self.visible_fixtures = []
+        self.fixture_data_mode = "none"
         self.live_table = QTableWidget(0, 7)
         self.live_table.setHorizontalHeaderLabels([
             "Kick-off (provider time)", "Competition", "Home team", "Away team",
@@ -550,43 +602,125 @@ class MainWindow(QMainWindow):
     def update_api_status(self):
         if hasattr(self, "api_card"):
             self.api_card.value_label.setText("Key saved" if self.get_api_key() else "Not configured")
+        if hasattr(self, "api_usage_label"):
+            self.api_usage_label.setText(
+                f"Local fixture requests today (UTC): {self.store.fixture_requests_today()} "
+                "• This is an app counter, not the provider's remaining quota."
+            )
 
-    def load_live_fixtures(self):
+    def set_live_fixtures(self, fixtures, mode):
+        self.live_fixtures = list(fixtures or [])
+        self.fixture_data_mode = mode
+        self.fixture_league_filter.blockSignals(True)
+        self.fixture_league_filter.clear()
+        self.fixture_league_filter.addItems(competition_options(self.live_fixtures))
+        self.fixture_league_filter.blockSignals(False)
+        self.apply_fixture_filters()
+        self.refresh_dashboard()
+
+    def load_demo_fixtures(self):
+        date = self.fixture_date.date().toString("yyyy-MM-dd")
+        sample = []
+        for index, (league, home, away, home_xg, away_xg) in enumerate(FIXTURES, start=1):
+            country = "Uganda" if "Uganda" in league else ("Egypt" if "CAF" in league else "England")
+            sample.append({
+                "fixture": {
+                    "id": -index, "date": f"{date}T{15 + index:02d}:00:00+00:00",
+                    "status": {"short": "NS", "long": "Not Started"},
+                    "venue": {"name": "Demo Stadium", "city": "Demo City"},
+                    "referee": None, "round": "Demo Matchday"
+                },
+                "league": {"id": -index, "name": league, "country": country},
+                "teams": {
+                    "home": {"id": -(index * 10), "name": home},
+                    "away": {"id": -(index * 10 + 1), "name": away}
+                },
+                "goals": {"home": None, "away": None},
+                "demo_expected_goals": [home_xg, away_xg]
+            })
+        self.set_live_fixtures(sample, "demo")
+        self.api_message.setText(
+            f"Demo mode: {len(sample)} sample fixtures loaded for {date}. "
+            "No API request was made; demo matches cannot be saved as real predictions."
+        )
+
+    def load_live_fixtures(self, force_refresh=False):
+        date = self.fixture_date.date().toString("yyyy-MM-dd")
+        if not force_refresh:
+            cached = self.store.get_fixture_cache(date)
+            if cached:
+                fixtures, cached_at = cached
+                self.set_live_fixtures(fixtures, "cache")
+                self.api_message.setText(
+                    f"Loaded {len(fixtures)} locally cached fixtures for {date} "
+                    f"(saved {cached_at.replace('T', ' ')[:16]} UTC). "
+                    "No API request was made. Use Refresh from API to fetch newer data."
+                )
+                self.update_api_status()
+                return
+
         key = self.get_api_key()
         if not key:
-            QMessageBox.information(self, "API key needed", "Click Set / Replace API Key first.")
+            QMessageBox.information(
+                self, "API key needed",
+                "No cached fixtures exist for this date. Set an API key or load Demo Fixtures."
+            )
             return
-        date = self.fixture_date.date().toString("yyyy-MM-dd")
-        self.api_message.setText(f"Loading fixtures for {date}…")
+        self.api_message.setText(f"Requesting fixtures for {date}…")
         self.load_fixtures_button.setEnabled(False)
+        self.refresh_fixtures_button.setEnabled(False)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.store.record_fixture_request()
+        self.update_api_status()
         try:
             fixtures = fetch_fixtures(api_key=key, date=date)
         except ApiFootballError as exc:
-            self.api_message.setText(str(exc))
-            QMessageBox.warning(self, "API request", str(exc))
+            cached = self.store.get_fixture_cache(date)
+            if cached:
+                cached_fixtures, cached_at = cached
+                self.set_live_fixtures(cached_fixtures, "cache")
+                self.api_message.setText(
+                    f"API request failed: {exc} Cached fixtures from {cached_at.replace('T', ' ')[:16]} UTC "
+                    "are displayed instead. No new provider data was received."
+                )
+            else:
+                self.api_message.setText(str(exc))
+                QMessageBox.warning(self, "API request", str(exc))
             return
         except Exception:
-            self.api_message.setText("Unexpected error while loading fixtures. Check your connection and try again.")
-            QMessageBox.warning(self, "API request", "Unexpected error. No key details were displayed.")
+            cached = self.store.get_fixture_cache(date)
+            if cached:
+                cached_fixtures, cached_at = cached
+                self.set_live_fixtures(cached_fixtures, "cache")
+                self.api_message.setText(
+                    f"Connection error. Showing locally cached fixtures saved at "
+                    f"{cached_at.replace('T', ' ')[:16]} UTC."
+                )
+            else:
+                self.api_message.setText("Unexpected error while loading fixtures. Check your connection and try again.")
+                QMessageBox.warning(self, "API request", "Unexpected error. No key details were displayed.")
             return
         finally:
             QApplication.restoreOverrideCursor()
             self.load_fixtures_button.setEnabled(True)
-        self.live_fixtures = fixtures
-        self.fixture_league_filter.blockSignals(True)
-        self.fixture_league_filter.clear()
-        self.fixture_league_filter.addItems(competition_options(fixtures))
-        self.fixture_league_filter.blockSignals(False)
-        self.apply_fixture_filters()
+            self.refresh_fixtures_button.setEnabled(True)
+        self.store.save_fixture_cache(date, fixtures)
+        self.set_live_fixtures(fixtures, "provider")
         self.api_message.setText(
-            f"Loaded {len(fixtures)} fixtures for {date}. "
-            "Provider coverage and completeness depend on your API plan."
+            f"Loaded {len(fixtures)} fixtures for {date} from API-Football and saved a local copy. "
+            "Provider coverage depends on your API plan."
         )
+        self.update_api_status()
         self.refresh_dashboard()
 
 
     def analyze_selected_fixture(self):
+        if self.fixture_data_mode == "demo":
+            QMessageBox.information(
+                self, "Demo fixture",
+                "This is sample data for testing the interface. Load provider fixtures before creating a real analysis."
+            )
+            return
         row = self.live_table.currentRow()
         if row < 0 or row >= len(self.visible_fixtures):
             QMessageBox.information(self, "Select a match", "Select a fixture row first, then choose Analyze Selected Match.")

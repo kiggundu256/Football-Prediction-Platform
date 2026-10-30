@@ -69,6 +69,25 @@ class StoreSourceMatchTests(unittest.TestCase):
         self.assertEqual(json.loads(saved[5]), markets)
         self.assertEqual(saved[6], 0)
 
+    def test_fixture_cache_round_trip_and_update(self):
+        fixtures = [{"fixture": {"id": 101}, "teams": {"home": {"name": "A"}}}]
+        self.store.save_fixture_cache("2026-10-31", fixtures)
+        cached, timestamp = self.store.get_fixture_cache("2026-10-31")
+        self.assertEqual(cached, fixtures)
+        self.assertTrue(timestamp.endswith("+00:00"))
+
+        updated = [{"fixture": {"id": 102}}]
+        self.store.save_fixture_cache("2026-10-31", updated)
+        cached, _ = self.store.get_fixture_cache("2026-10-31")
+        self.assertEqual(cached, updated)
+        self.assertIsNone(self.store.get_fixture_cache("2026-11-01"))
+
+    def test_fixture_request_counter_tracks_local_attempts(self):
+        before = self.store.fixture_requests_today()
+        self.store.record_fixture_request()
+        self.store.record_fixture_request()
+        self.assertEqual(self.store.fixture_requests_today(), before + 2)
+
     def test_existing_prediction_history_is_preserved(self):
         # Store initialization creates the current schema. Insert a legacy
         # prediction into it, then initialize Store again as an app restart.
