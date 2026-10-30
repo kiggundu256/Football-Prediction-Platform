@@ -86,6 +86,7 @@ class Store:
                 "actual_away_goals": "INTEGER",
                 "settled_at_utc": "TEXT",
                 "outcomes_json": "TEXT",
+                "features_json": "TEXT",
             }
             for column, definition in migrations.items():
                 if column not in columns:
@@ -96,6 +97,11 @@ class Store:
             db.execute("""CREATE TABLE IF NOT EXISTS fixture_cache (
                 fixture_date TEXT PRIMARY KEY,
                 fixtures_json TEXT NOT NULL,
+                cached_at_utc TEXT NOT NULL
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS provider_data_cache (
+                cache_key TEXT PRIMARY KEY,
+                data_json TEXT NOT NULL,
                 cached_at_utc TEXT NOT NULL
             )""")
 
@@ -112,16 +118,17 @@ class Store:
                 (datetime.now(timezone.utc).isoformat(), fixture[0], fixture[1], fixture[2],
                  hxg, axg, json.dumps(markets)))
 
-    def save_analysis(self, fixture, home_xg, away_xg, markets, source_matches, h2h_matches=None):
+    def save_analysis(self, fixture, home_xg, away_xg, markets, source_matches, h2h_matches=None, features=None):
         """Persist a real fixture analysis and the exact historical matches behind it."""
         with self.connect() as db:
             cursor = db.execute("""INSERT INTO prediction_runs
                 (created_at_utc, competition, home_team, away_team, home_xg, away_xg,
-                 markets_json, is_demo, fixture_id, match_date, result_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'pending')""",
+                 markets_json, is_demo, fixture_id, match_date, result_status, features_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'pending', ?)""",
                 (datetime.now(timezone.utc).isoformat(), fixture["competition"],
                  fixture["home_team"], fixture["away_team"], home_xg, away_xg,
-                 json.dumps(markets), fixture.get("fixture_id"), fixture.get("match_date")))
+                 json.dumps(markets), fixture.get("fixture_id"), fixture.get("match_date"),
+                 json.dumps(features or {})))
             prediction_id = cursor.lastrowid
             for entry in source_matches:
                 match = entry["match"]
@@ -210,6 +217,37 @@ class Store:
             row = db.execute("""SELECT fixtures_json, cached_at_utc FROM fixture_cache
                 WHERE fixture_date = ?""", (fixture_date,)).fetchone()
         return (json.loads(row[0]), row[1]) if row else None
+
+    def get_provider_cache(self, cache_key, max_age_seconds=None):
+        """Return cached JSON data when it is within the requested freshness window."""
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT data_json, cached_at_utc FROM provider_data_cache WHERE cache_key = ?",
+                (cache_key,),
+            ).fetchone()
+        if not row:
+            return None
+        if max_age_seconds is not None:
+            cached_at = datetime.fromisoformat(row[1])
+            age = (datetime.now(timezone.utc) - cached_at).total_seconds()
+            if age > max_age_seconds:
+                return None
+        return json.loads(row[0])
+
+    def save_provider_cache(self, cache_key, data):
+        """Persist optional provider/weather payloads without altering prediction history."""
+        with self.connect() as db:
+            db.execute("""INSERT INTO provider_data_cache (cache_key, data_json, cached_at_utc)
+                VALUES (?, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET
+                data_json = excluded.data_json, cached_at_utc = excluded.cached_at_utc""",
+                (cache_key, json.dumps(data), datetime.now(timezone.utc).isoformat()))
+
+    def training_records(self):
+        """Return settled historical prediction features for optional local ML training."""
+        with self.connect() as db:
+            return db.execute("""SELECT features_json, actual_home_goals, actual_away_goals
+                FROM prediction_runs WHERE is_demo = 0 AND result_status = 'settled'
+                AND features_json IS NOT NULL AND features_json != '{}'""").fetchall()
 
     def predicted_fixture_ids(self):
         """Return provider fixture IDs that already have a saved real prediction."""

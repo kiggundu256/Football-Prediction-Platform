@@ -82,6 +82,14 @@ class StoreSourceMatchTests(unittest.TestCase):
         self.assertEqual(cached, updated)
         self.assertIsNone(self.store.get_fixture_cache("2026-11-01"))
 
+
+    def test_provider_cache_and_training_records(self):
+        payload = {"lineups": [{"team": "Home"}]}
+        self.store.save_provider_cache("lineups:123", payload)
+        self.assertEqual(self.store.get_provider_cache("lineups:123"), payload)
+        self.assertIsNone(self.store.get_provider_cache("missing:key"))
+        self.assertEqual(self.store.training_records(), [])
+
     def test_existing_prediction_history_is_preserved(self):
         # Store initialization creates the current schema. Insert a legacy
         # prediction into it, then initialize Store again as an app restart.
