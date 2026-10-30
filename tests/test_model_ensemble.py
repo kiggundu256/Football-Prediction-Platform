@@ -22,7 +22,14 @@ class ModelEnsembleTests(unittest.TestCase):
         self.assertEqual(result["model_quality"]["confidence_band"], "Moderate")
         self.assertFalse(result["model_quality"]["trained_ml_model"])
 
-    def test_requires_both_team_profiles(self):
+    def test_context_coverage_reduces_confidence_when_sources_are_missing(self):
+        result = predict_ensemble(self.home, self.away, context={
+            "injuries": True, "lineups": True, "referee": True,
+            "weather": True, "corners": True,
+        })
+        self.assertEqual(result["model_quality"]["confidence_band"], "Better")
+        self.assertEqual(len(result["model_quality"]["context_sources_missing"]), 0)
+\n    def test_requires_both_team_profiles(self):
         with self.assertRaises(ValueError):
             predict_ensemble(self.home, None)
 

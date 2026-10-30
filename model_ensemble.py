@@ -34,7 +34,7 @@ def _form_probabilities(home_profile, away_profile, home_advantage=0.12):
     }
 
 
-def predict_ensemble(home_profile, away_profile, home_advantage=0.12, ml_probabilities=None, ml_samples=0):
+def predict_ensemble(home_profile, away_profile, home_advantage=0.12, ml_probabilities=None, ml_samples=0, context=None):
     """Return goal probabilities and a blended 1X2 forecast with model evidence."""
     if not home_profile or not away_profile:
         raise ValueError("Both teams need completed historical match profiles.")
@@ -70,8 +70,19 @@ def predict_ensemble(home_profile, away_profile, home_advantage=0.12, ml_probabi
     }
     total_samples = int(home_profile.get("played", 0)) + int(away_profile.get("played", 0))
     minimum_samples = min(int(home_profile.get("played", 0)), int(away_profile.get("played", 0)))
-    coverage = _clamp(minimum_samples / 8.0)
-    confidence = "Low" if minimum_samples < 4 else ("Moderate" if minimum_samples < 8 else "Better")
+    context = context or {}
+    context_sources = [
+        name for name in ("injuries", "lineups", "referee", "weather", "corners")
+        if context.get(name)
+    ]
+    context_score = len(context_sources) / 5.0
+    coverage = _clamp(0.65 * (minimum_samples / 8.0) + 0.35 * context_score)
+    if minimum_samples < 4 or len(context_sources) < 2:
+        confidence = "Low"
+    elif minimum_samples < 8 or len(context_sources) < 4:
+        confidence = "Moderate"
+    else:
+        confidence = "Better"
     markets = dict(goal_model)
     markets.update(ensemble_1x2)
     markets["model_components"] = {
@@ -93,7 +104,11 @@ def predict_ensemble(home_profile, away_profile, home_advantage=0.12, ml_probabi
         "coverage_score": coverage,
         "trained_ml_model": ml_active,
         "ml_training_samples": int(ml_samples) if ml_active else 0,
-        "note": "Model weights are initial baselines and require chronological backtesting and calibration.",
+        "context_sources_available": context_sources,
+        "context_sources_missing": [name for name in ("injuries", "lineups", "referee", "weather", "corners") if name not in context_sources],
+        "context_adjustments_applied": False,
+        "note": "Context completeness informs confidence. Injury, lineup, referee and weather effects are not numerically weighted until validated against historical data.",
+
     }
     return {
         "home_xg": home_xg,
