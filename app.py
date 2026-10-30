@@ -497,6 +497,7 @@ class MainWindow(QMainWindow):
         buttons.rejected.connect(dialog.reject)
         buttons.accepted.connect(dialog.accept)
         layout.addWidget(buttons)
+        enable_text_selection(dialog)
         dialog.exec()
 
     def analysis(self):
