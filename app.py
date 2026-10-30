@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
 from api_football import ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures
 from prediction_engine import predict_markets
 from analysis_explainer import team_profile, build_analysis_explanation
+from api_football import fetch_head_to_head_fixtures
+from head_to_head import summarize_head_to_head
 from ui_theme import APP_STYLESHEET
 
 APP_NAME = "Football Prediction Platform"
@@ -63,6 +65,14 @@ class Store:
                 FOREIGN KEY(prediction_run_id) REFERENCES prediction_runs(id))""")
             db.execute("""CREATE INDEX IF NOT EXISTS idx_source_matches_prediction
                 ON prediction_source_matches(prediction_run_id, team_side, match_date)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS prediction_head_to_head (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, prediction_run_id INTEGER NOT NULL,
+                fixture_id INTEGER, match_date TEXT NOT NULL, competition TEXT NOT NULL,
+                home_team TEXT NOT NULL, away_team TEXT NOT NULL, home_goals INTEGER,
+                away_goals INTEGER, match_json TEXT NOT NULL,
+                FOREIGN KEY(prediction_run_id) REFERENCES prediction_runs(id))""")
+            db.execute("""CREATE INDEX IF NOT EXISTS idx_h2h_prediction
+                ON prediction_head_to_head(prediction_run_id, match_date)""")
 
     def connect(self):
         return sqlite3.connect(self.path)
@@ -75,7 +85,7 @@ class Store:
                 (datetime.now(timezone.utc).isoformat(), fixture[0], fixture[1], fixture[2],
                  hxg, axg, json.dumps(markets)))
 
-    def save_analysis(self, fixture, home_xg, away_xg, markets, source_matches):
+    def save_analysis(self, fixture, home_xg, away_xg, markets, source_matches, h2h_matches=None):
         """Persist a real fixture analysis and the exact historical matches behind it."""
         with self.connect() as db:
             cursor = db.execute("""INSERT INTO prediction_runs
@@ -116,7 +126,29 @@ class Store:
                      away.get("name", "Unknown"), hg, ag,
                      "Home" if is_home else "Away", opponent, result,
                      json.dumps(match)))
+            for match in (h2h_matches or []):
+                fixture_data = match.get("fixture") or {}
+                league = match.get("league") or {}
+                teams = match.get("teams") or {}
+                goals = match.get("goals") or {}
+                home = teams.get("home") or {}
+                away = teams.get("away") or {}
+                db.execute("""INSERT INTO prediction_head_to_head
+                    (prediction_run_id, fixture_id, match_date, competition, home_team,
+                     away_team, home_goals, away_goals, match_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (prediction_id, fixture_data.get("id"),
+                     (fixture_data.get("date") or "")[:10], league.get("name", "Unknown"),
+                     home.get("name", "Unknown"), away.get("name", "Unknown"),
+                     goals.get("home"), goals.get("away"), json.dumps(match)))
         return prediction_id
+
+    def h2h_matches(self, prediction_id):
+        with self.connect() as db:
+            return db.execute("""SELECT fixture_id, match_date, competition, home_team,
+                away_team, home_goals, away_goals FROM prediction_head_to_head
+                WHERE prediction_run_id = ? ORDER BY match_date DESC, id DESC""",
+                (prediction_id,)).fetchall()
 
     def source_matches(self, prediction_id, team_side=None):
         query = """SELECT team_side, fixture_id, match_date, competition, home_team,
@@ -349,6 +381,14 @@ class MainWindow(QMainWindow):
             away_recent = fetch_recent_team_fixtures(
                 away_id, api_key=key, last=5, before_date=fixture_date
             )
+            try:
+                h2h_matches = fetch_head_to_head_fixtures(
+                    home_id, away_id, api_key=key, before_date=fixture_date, limit=10
+                )
+                h2h_error = None
+            except ApiFootballError as h2h_exc:
+                h2h_matches = []
+                h2h_error = str(h2h_exc)
         except ApiFootballError as exc:
             QMessageBox.warning(self, "Form data unavailable", str(exc))
             self.api_message.setText(str(exc))
@@ -398,7 +438,7 @@ class MainWindow(QMainWindow):
         )
         try:
             prediction_id = self.store.save_analysis(
-                fixture_info, home_xg, away_xg, markets, source_matches
+                fixture_info, home_xg, away_xg, markets, source_matches, h2h_matches
             )
         except sqlite3.Error as exc:
             QMessageBox.critical(
@@ -437,10 +477,12 @@ class MainWindow(QMainWindow):
         self.show_analysis_dialog(
             report, prediction_id, home_name, away_name,
             self.store.source_matches(prediction_id, "home"),
-            self.store.source_matches(prediction_id, "away")
+            self.store.source_matches(prediction_id, "away"),
+            self.store.h2h_matches(prediction_id),
+            h2h_error
         )
 
-    def show_analysis_dialog(self, report, prediction_id, home_name, away_name, home_rows, away_rows):
+    def show_analysis_dialog(self, report, prediction_id, home_name, away_name, home_rows, away_rows, h2h_rows, h2h_error=None):
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Match Analysis — {home_name} vs {away_name}")
         dialog.resize(1050, 760)
@@ -493,6 +535,29 @@ class MainWindow(QMainWindow):
         add_team_table(home_name, home_rows)
         add_team_table(away_name, away_rows)
         layout.addLayout(tables, 1)
+
+        h2h_heading = QLabel(f"HEAD-TO-HEAD • {len(h2h_rows)} previous meetings")
+        h2h_heading.setStyleSheet("font-size:16px;font-weight:700;color:#168BFF")
+        layout.addWidget(h2h_heading)
+        h2h_table = QTableWidget(len(h2h_rows), 5)
+        h2h_table.setHorizontalHeaderLabels(["Date", "Competition", "Home Team", "Score", "Away Team"])
+        h2h_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        h2h_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        h2h_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        enable_table_copy(h2h_table)
+        for row_index, record in enumerate(h2h_rows):
+            fixture_id, match_date, competition, hteam, ateam, hg, ag = record
+            values = [match_date, competition, hteam, f"{hg}–{ag}" if hg is not None and ag is not None else "—", ateam]
+            for column, value in enumerate(values):
+                h2h_table.setItem(row_index, column, QTableWidgetItem(str(value)))
+        h2h_table.resizeColumnsToContents()
+        layout.addWidget(h2h_table)
+        if h2h_error:
+            note = QLabel(f"Head-to-head data unavailable: {h2h_error}")
+            note.setWordWrap(True)
+            layout.addWidget(note)
+        elif not h2h_rows:
+            layout.addWidget(QLabel("No previous completed meetings were found in the accessible seasons."))
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dialog.reject)
         buttons.accepted.connect(dialog.accept)
