@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 from api_football import ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures
 from prediction_engine import predict_markets
+from ui_theme import APP_STYLESHEET
 
 APP_NAME = "Football Prediction Platform"
 KEYRING_SERVICE = "FootballPredictionPlatform"
@@ -136,12 +137,12 @@ class Store:
 class Card(QFrame):
     def __init__(self, title, value, note):
         super().__init__()
-        self.setStyleSheet("QFrame{background:white;border:1px solid #dce3ec;border-radius:10px}")
+        self.setStyleSheet("QFrame{background:#111D30;border:1px solid #26364D;border-radius:10px}")
         box = QVBoxLayout(self)
         a, self.value_label, c = QLabel(title), QLabel(value), QLabel(note)
-        a.setStyleSheet("color:#657187;border:0")
-        self.value_label.setStyleSheet("font-size:23px;font-weight:700;color:#173b70;border:0")
-        c.setStyleSheet("color:#657187;border:0")
+        a.setStyleSheet("color:#94A9C7;border:0")
+        self.value_label.setStyleSheet("font-size:23px;font-weight:700;color:#168BFF;border:0")
+        c.setStyleSheet("color:#94A9C7;border:0")
         box.addWidget(a); box.addWidget(self.value_label); box.addWidget(c)
 
 
@@ -151,21 +152,17 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.resize(1100, 740)
         self.store = Store()
-        self.setStyleSheet("""QMainWindow,QWidget{background:#f4f7fb;color:#172033;font-family:Segoe UI}
-            QTabBar::tab{padding:12px 18px;background:#e8edf5}
-            QTabBar::tab:selected{background:white;color:#1557a6;font-weight:700}
-            QPushButton{background:#1769d2;color:white;padding:10px;border:0;border-radius:6px}
-            QComboBox,QSpinBox,QDateEdit{background:white;padding:7px;border:1px solid #cbd5e1}""")
+        self.setStyleSheet(APP_STYLESHEET)
         root = QWidget(); outer = QVBoxLayout(root)
         head = QHBoxLayout()
         title = QLabel("FOOTBALL ANALYTICS")
-        title.setStyleSheet("font-size:24px;font-weight:800;color:#173b70")
+        title.setStyleSheet("font-size:24px;font-weight:800;color:#EAF2FF")
         head.addWidget(title); head.addStretch()
         head.addWidget(QLabel("Local-first • Forecast history • Performance tracking"))
         outer.addLayout(head)
         self.warning = QLabel("DEMO MODE: sample predictions are illustrative. Live fixtures can be loaded in the Live Fixtures tab.")
         self.warning.setWordWrap(True)
-        self.warning.setStyleSheet("background:#fff1cc;color:#795400;padding:10px;border-radius:6px")
+        self.warning.setStyleSheet("background:#302817;color:#F5B942;padding:10px;border:1px solid #725521;border-radius:7px")
         outer.addWidget(self.warning)
         self.tabs = QTabWidget()
         self.tabs.addTab(self.dashboard(), "Dashboard")
@@ -456,11 +453,11 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dialog)
         summary = QLabel(report)
         summary.setWordWrap(True)
-        summary.setStyleSheet("background:white;padding:14px;border-radius:8px")
+        summary.setStyleSheet("background:#111D30;padding:14px;border:1px solid #26364D;border-radius:8px")
         layout.addWidget(summary)
 
         heading = QLabel(f"Historical matches used • Analysis #{prediction_id}")
-        heading.setStyleSheet("font-size:16px;font-weight:700;color:#173b70")
+        heading.setStyleSheet("font-size:16px;font-weight:700;color:#168BFF")
         layout.addWidget(heading)
         tables = QHBoxLayout()
 
@@ -516,7 +513,7 @@ class MainWindow(QMainWindow):
         buttons.addWidget(calc); buttons.addWidget(save); buttons.addStretch(); box.addLayout(buttons)
         self.output = QLabel("Choose a sample fixture and calculate illustrative probabilities.")
         self.output.setWordWrap(True); self.output.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.output.setStyleSheet("background:white;padding:18px;border-radius:8px;font-size:14px")
+        self.output.setStyleSheet("background:#111D30;padding:18px;border:1px solid #26364D;border-radius:8px;font-size:14px")
         box.addWidget(self.output, 1); self.markets = None
         return page
 
@@ -551,7 +548,7 @@ class MainWindow(QMainWindow):
 
     def performance(self):
         page = QWidget(); box = QVBoxLayout(page)
-        title = QLabel("Performance Lab"); title.setStyleSheet("font-size:20px;font-weight:700")
+        title = QLabel("Performance Lab"); title.setStyleSheet("font-size:20px;font-weight:700;color:#EAF2FF")
         box.addWidget(title)
         box.addWidget(QLabel("No accuracy scores yet: verified results, settlement, Brier score, log loss and calibration will be added after real fixture data is validated."))
         box.addStretch(); return page
