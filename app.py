@@ -281,8 +281,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.tabs); self.setCentralWidget(root)
         self.refresh_history()
         self.update_api_status()
-        if hasattr(self, "api_usage_label"):
-            self.update_api_status()
+        self.restore_cached_fixtures()
         enable_text_selection(self)
 
     def dashboard(self):
@@ -369,6 +368,7 @@ class MainWindow(QMainWindow):
         self.fixture_date = QDateEdit(QDate.currentDate())
         self.fixture_date.setCalendarPopup(True)
         self.fixture_date.setDisplayFormat("yyyy-MM-dd")
+        self.fixture_date.dateChanged.connect(self.restore_cached_fixtures)
         controls.addWidget(self.fixture_date)
         self.load_fixtures_button = QPushButton("Load / Use Cached")
         self.load_fixtures_button.setToolTip("Load saved fixtures for this date; fetch only if no local copy exists.")
@@ -653,6 +653,25 @@ class MainWindow(QMainWindow):
         self.api_message.setText(
             f"Demo mode: {len(sample)} sample fixtures loaded for {date}. "
             "No API request was made; demo matches cannot be saved as real predictions."
+        )
+
+    def restore_cached_fixtures(self):
+        """Restore the selected date from SQLite without contacting the provider."""
+        if not hasattr(self, "fixture_date") or not hasattr(self, "live_table"):
+            return
+        date = self.fixture_date.date().toString("yyyy-MM-dd")
+        cached = self.store.get_fixture_cache(date)
+        if not cached:
+            self.set_live_fixtures([], "none")
+            self.api_message.setText(
+                f"No local fixture cache exists for {date}. Load Demo Fixtures or refresh from API."
+            )
+            return
+        fixtures, cached_at = cached
+        self.set_live_fixtures(fixtures, "cache")
+        self.api_message.setText(
+            f"Restored {len(fixtures)} locally cached fixtures for {date} "
+            f"(saved {cached_at.replace('T', ' ')[:16]} UTC). No API request was made."
         )
 
     def load_live_fixtures(self, force_refresh=False):
