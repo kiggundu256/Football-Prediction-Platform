@@ -30,6 +30,16 @@ class ApiFootballTests(unittest.TestCase):
         with self.assertRaisesRegex(ApiFootballError, "rejected"):
             fetch_fixtures(api_key="bad-key")
 
+    @patch("api_football.requests.get")
+    def test_provider_error_details_are_preserved(self, get):
+        response = Mock()
+        response.ok = True
+        response.status_code = 200
+        response.json.return_value = {"response": [], "errors": {"plan": "Access denied for this endpoint"}}
+        get.return_value = response
+        with self.assertRaisesRegex(ApiFootballError, "Access denied for this endpoint"):
+            fetch_recent_team_fixtures(10, api_key="test-key", last=5)
+
     @patch("api_football.requests.get", side_effect=requests.Timeout())
     def test_network_error_does_not_leak_request_details(self, get):
         with self.assertRaisesRegex(ApiFootballError, "Could not reach"):
