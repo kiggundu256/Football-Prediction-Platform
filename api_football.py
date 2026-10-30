@@ -127,6 +127,39 @@ def fetch_recent_team_fixtures(team_id, api_key=None, last=5, before_date=None, 
     return completed[:requested]
 
 
+def fetch_fixture_by_id(fixture_id, api_key=None, timeout=20):
+    """Fetch one fixture by provider ID for prediction-result settlement."""
+    key = api_key or os.environ.get("API_FOOTBALL_KEY")
+    if not key:
+        raise ApiFootballError("API key is missing. Enter it in the app settings.")
+    if not fixture_id:
+        raise ApiFootballError("A valid fixture ID is required.")
+    try:
+        response = requests.get(
+            f"{BASE_URL}/fixtures",
+            headers={"x-apisports-key": key},
+            params={"id": int(fixture_id)},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise ApiFootballError(f"Could not reach API-Football: {exc.__class__.__name__}") from None
+    if response.status_code in (401, 403):
+        raise ApiFootballError("API-Football rejected the key or plan access. Check the dashboard and subscription.")
+    if response.status_code == 429:
+        raise ApiFootballError("API-Football request limit reached. Try again later.")
+    if not response.ok:
+        raise ApiFootballError(f"API-Football returned HTTP {response.status_code}.")
+    try:
+        payload = response.json()
+    except ValueError:
+        raise ApiFootballError("API-Football returned an unreadable response.") from None
+    errors = payload.get("errors")
+    if errors:
+        raise ApiFootballError(_format_provider_errors(errors))
+    fixtures = payload.get("response", [])
+    return fixtures[0] if fixtures else None
+
+
 def fetch_head_to_head_fixtures(home_team_id, away_team_id, api_key=None, before_date=None, limit=10, timeout=20):
     """Fetch recent completed meetings without using the restricted 'last' parameter."""
     key = api_key or os.environ.get("API_FOOTBALL_KEY")
