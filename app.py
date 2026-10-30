@@ -526,39 +526,207 @@ class MainWindow(QMainWindow):
             self.store.source_matches(prediction_id, "home"),
             self.store.source_matches(prediction_id, "away"),
             self.store.h2h_matches(prediction_id),
-            h2h_error
+            h2h_error, competition=fixture_info["competition"],
+            home_profile=hr, away_profile=ar, home_xg=home_xg,
+            away_xg=away_xg, markets=markets, explanation=explanation
         )
 
-    def show_analysis_dialog(self, report, prediction_id, home_name, away_name, home_rows, away_rows, h2h_rows, h2h_error=None):
+    def show_analysis_dialog(
+        self, report, prediction_id, home_name, away_name, home_rows,
+        away_rows, h2h_rows, h2h_error=None, *, competition="",
+        home_profile=None, away_profile=None, home_xg=0.0,
+        away_xg=0.0, markets=None, explanation=None
+    ):
+        """Show the forecast as a structured, selectable analytics report."""
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Match Analysis — {home_name} vs {away_name}")
-        dialog.resize(1050, 760)
+        dialog.resize(1120, 820)
         outer_layout = QVBoxLayout(dialog)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         content = QWidget()
         layout = QVBoxLayout(content)
+        layout.setSpacing(14)
         scroll.setWidget(content)
         outer_layout.addWidget(scroll)
-        summary = QLabel(report)
-        summary.setWordWrap(True)
-        summary.setStyleSheet("background:#111D30;padding:14px;border:1px solid #26364D;border-radius:8px")
-        summary.setTextInteractionFlags(
+
+        selectable = (
             Qt.TextInteractionFlag.TextSelectableByMouse
             | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
-        layout.addWidget(summary)
 
-        heading = QLabel(f"Historical matches used • Analysis #{prediction_id}")
-        heading.setStyleSheet("font-size:16px;font-weight:700;color:#168BFF")
-        layout.addWidget(heading)
+        def section_title(text):
+            label = QLabel(text)
+            label.setStyleSheet(
+                "font-size:16px;font-weight:800;color:#168BFF;"
+                "padding:5px 0 2px 0;background:transparent"
+            )
+            label.setTextInteractionFlags(selectable)
+            layout.addWidget(label)
+            return label
+
+        def panel():
+            frame = QFrame()
+            frame.setStyleSheet(
+                "QFrame{background:#111D30;border:1px solid #26364D;"
+                "border-radius:9px}"
+            )
+            return frame
+
+        def metric_card(title, value, note=""):
+            frame = panel()
+            frame.setMinimumHeight(82)
+            card_layout = QVBoxLayout(frame)
+            card_layout.setContentsMargins(12, 10, 12, 10)
+            heading = QLabel(title.upper())
+            heading.setStyleSheet("font-size:9pt;font-weight:700;color:#94A9C7;border:0")
+            number = QLabel(str(value))
+            number.setStyleSheet("font-size:21px;font-weight:800;color:#EAF2FF;border:0")
+            detail = QLabel(note)
+            detail.setWordWrap(True)
+            detail.setStyleSheet("font-size:9pt;color:#94A9C7;border:0")
+            for widget in (heading, number, detail):
+                widget.setTextInteractionFlags(selectable)
+                card_layout.addWidget(widget)
+            return frame
+
+        # Match identity and report metadata.
+        hero = panel()
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(18, 15, 18, 15)
+        match_name = QLabel(f"{home_name}  vs  {away_name}")
+        match_name.setStyleSheet("font-size:23px;font-weight:800;color:#FFFFFF;border:0")
+        match_name.setTextInteractionFlags(selectable)
+        meta = QLabel(f"{competition}    •    Analysis #{prediction_id}")
+        meta.setStyleSheet("font-size:10pt;color:#94A9C7;border:0")
+        meta.setTextInteractionFlags(selectable)
+        hero_layout.addWidget(match_name)
+        hero_layout.addWidget(meta)
+        layout.addWidget(hero)
+
+        if home_profile and away_profile and markets:
+            section_title("TEAM FORM & EXPECTED GOALS")
+            form_grid = QGridLayout()
+            form_grid.setHorizontalSpacing(10)
+            form_grid.setVerticalSpacing(10)
+            form_grid.addWidget(metric_card(
+                home_name, f"{home_profile['wins']}W  {home_profile['draws']}D  {home_profile['losses']}L",
+                f"{home_profile['played']} matches • {home_profile['scored_avg']:.2f} scored / "
+                f"{home_profile['conceded_avg']:.2f} conceded per match"
+            ), 0, 0)
+            form_grid.addWidget(metric_card(
+                away_name, f"{away_profile['wins']}W  {away_profile['draws']}D  {away_profile['losses']}L",
+                f"{away_profile['played']} matches • {away_profile['scored_avg']:.2f} scored / "
+                f"{away_profile['conceded_avg']:.2f} conceded per match"
+            ), 0, 1)
+            form_grid.addWidget(metric_card(
+                f"{home_name} expected goals", f"{home_xg:.2f}",
+                "Estimated from own scoring and opponent conceding averages"
+            ), 1, 0)
+            form_grid.addWidget(metric_card(
+                f"{away_name} expected goals", f"{away_xg:.2f}",
+                "Estimated from own scoring and opponent conceding averages"
+            ), 1, 1)
+            layout.addLayout(form_grid)
+
+            section_title("PREDICTED OUTCOMES")
+            outcome_panel = panel()
+            outcome_layout = QVBoxLayout(outcome_panel)
+            outcome_layout.setContentsMargins(14, 12, 14, 12)
+
+            def add_market_row(name, entries):
+                row = QHBoxLayout()
+                label = QLabel(name)
+                label.setMinimumWidth(135)
+                label.setStyleSheet("font-weight:700;color:#AFC3DF;border:0")
+                label.setTextInteractionFlags(selectable)
+                row.addWidget(label)
+                for caption, probability in entries:
+                    cell = QLabel(f"{caption}\n{probability:.1%}")
+                    cell.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    cell.setMinimumWidth(105)
+                    cell.setStyleSheet(
+                        "background:#16243A;border:1px solid #26364D;"
+                        "border-radius:6px;padding:8px;font-weight:700;color:#EAF2FF"
+                    )
+                    cell.setTextInteractionFlags(selectable)
+                    row.addWidget(cell, 1)
+                outcome_layout.addLayout(row)
+
+            add_market_row("1X2", [
+                (home_name + " win", markets["home_win"]),
+                ("Draw", markets["draw"]),
+                (away_name + " win", markets["away_win"]),
+            ])
+            add_market_row("TOTAL GOALS", [
+                ("Over 1.5", markets["over"]["1.5"]),
+                ("Over 2.5", markets["over"]["2.5"]),
+                ("Over 3.5", markets["over"]["3.5"]),
+            ])
+            add_market_row("BTTS", [
+                ("Yes", markets["btts_yes"]),
+                ("No", markets["btts_no"]),
+            ])
+            layout.addWidget(outcome_panel)
+
+            section_title("MOST LIKELY SCORELINES")
+            score_panel = panel()
+            score_layout = QHBoxLayout(score_panel)
+            score_layout.setContentsMargins(12, 10, 12, 10)
+            for home_goals, away_goals, probability in markets.get("top_scores", [])[:5]:
+                score_layout.addWidget(metric_card(
+                    f"{home_name} – {away_name}",
+                    f"{home_goals} – {away_goals}",
+                    f"{probability:.1%} model probability"
+                ), 1)
+            layout.addWidget(score_panel)
+
+            section_title("WHY THE MODEL LEANS THIS WAY")
+            explanation_panel = panel()
+            explanation_layout = QVBoxLayout(explanation_panel)
+            explanation_layout.setContentsMargins(14, 12, 14, 12)
+            for line in (explanation or []):
+                if line == "WHY THE MODEL LEANS THIS WAY":
+                    continue
+                label = QLabel(line)
+                label.setWordWrap(True)
+                label.setStyleSheet("color:#D7E3F5;border:0;padding:3px")
+                label.setTextInteractionFlags(selectable)
+                explanation_layout.addWidget(label)
+            layout.addWidget(explanation_panel)
+
+            coverage = QLabel(
+                "DATA LIMITATION  •  The baseline uses up to five completed historical "
+                "matches per team from the accessible 2022–2024 seasons. It does not yet "
+                "adjust for current-season form, opponent strength, injuries, confirmed "
+                "lineups, corners, referee or weather."
+            )
+            coverage.setWordWrap(True)
+            coverage.setStyleSheet(
+                "background:#302817;color:#F5D58A;padding:11px;"
+                "border:1px solid #725521;border-radius:7px"
+            )
+            coverage.setTextInteractionFlags(selectable)
+            layout.addWidget(coverage)
+        else:
+            # Keep older saved report text available if a caller has no structured data.
+            fallback = QLabel(report)
+            fallback.setWordWrap(True)
+            fallback.setStyleSheet(
+                "background:#111D30;padding:14px;border:1px solid #26364D;border-radius:8px"
+            )
+            fallback.setTextInteractionFlags(selectable)
+            layout.addWidget(fallback)
+
+        section_title(f"RECENT MATCHES USED  •  ANALYSIS #{prediction_id}")
         tables = QHBoxLayout()
 
         def add_team_table(title, rows):
-            panel = QVBoxLayout()
+            panel_layout = QVBoxLayout()
             label = QLabel(f"{title} — {len(rows)} matches")
-            label.setStyleSheet("font-weight:700")
-            panel.addWidget(label)
+            label.setStyleSheet("font-weight:700;color:#EAF2FF")
+            label.setTextInteractionFlags(selectable)
+            panel_layout.addWidget(label)
             table = QTableWidget(len(rows), 6)
             table.setHorizontalHeaderLabels(
                 ["Date", "Competition", "Venue", "Opponent", "Score", "Result"]
@@ -569,36 +737,38 @@ class MainWindow(QMainWindow):
             enable_table_copy(table)
             table.horizontalHeader().setStretchLastSection(True)
             for row_index, record in enumerate(rows):
-                (_side, _fixture_id, match_date, competition, home_team, away_team,
+                (_side, _fixture_id, match_date, league, home_team, away_team,
                  home_goals, away_goals, venue, opponent, result) = record
                 score = (
                     f"{home_goals}–{away_goals}"
                     if home_goals is not None and away_goals is not None else "—"
                 )
-                values = [match_date, competition, venue, opponent, score, result]
+                values = [match_date, league, venue, opponent, score, result]
                 for column, value in enumerate(values):
                     cell = QTableWidgetItem(str(value))
                     if column == 5:
                         cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     table.setItem(row_index, column, cell)
             table.resizeColumnsToContents()
-            panel.addWidget(table)
-            tables.addLayout(panel, 1)
+            panel_layout.addWidget(table)
+            tables.addLayout(panel_layout, 1)
 
         add_team_table(home_name, home_rows)
         add_team_table(away_name, away_rows)
-        layout.addLayout(tables, 1)
+        layout.addLayout(tables)
 
-        h2h_heading = QLabel(f"HEAD-TO-HEAD • {len(h2h_rows)} previous meetings")
-        h2h_heading.setStyleSheet("font-size:16px;font-weight:700;color:#168BFF")
-        layout.addWidget(h2h_heading)
-        if h2h_rows:
+        section_title(f"HEAD-TO-HEAD  •  {len(h2h_rows)} PREVIOUS MEETINGS")
+        completed_h2h = [
+            record for record in h2h_rows
+            if record[5] is not None and record[6] is not None
+        ]
+        if completed_h2h:
             home_wins = draws = away_wins = total_goals = over_15 = over_25 = over_35 = btts = 0
-            for record in h2h_rows:
-                _fid, _date, _competition, historical_home, historical_away, hg, ag = record
-                if hg is None or ag is None:
-                    continue
-                home_score, away_score = (hg, ag) if historical_home == home_name else (ag, hg)
+            for record in completed_h2h:
+                _fid, _date, _league, historical_home, historical_away, hg, ag = record
+                home_score, away_score = (
+                    (hg, ag) if historical_home == home_name else (ag, hg)
+                )
                 home_wins += home_score > away_score
                 draws += home_score == away_score
                 away_wins += home_score < away_score
@@ -608,37 +778,64 @@ class MainWindow(QMainWindow):
                 over_25 += goals_total >= 3
                 over_35 += goals_total >= 4
                 btts += home_score > 0 and away_score > 0
-            count = len(h2h_rows)
-            stats = QLabel(
-                f"Record: {home_name} {home_wins} wins • {draws} draws • "
-                f"{away_name} {away_wins} wins    |    "
-                f"Average goals: {total_goals / count:.2f}    |    "
-                f"Over 1.5: {over_15 / count:.0%}    |    "
-                f"Over 2.5: {over_25 / count:.0%}    |    "
-                f"Over 3.5: {over_35 / count:.0%}    |    BTTS: {btts / count:.0%}"
-            )
-            stats.setWordWrap(True)
-            stats.setStyleSheet("background:#16243A;padding:10px;border:1px solid #26364D;border-radius:7px")
-            layout.addWidget(stats)
+            count = len(completed_h2h)
+            stats_panel = panel()
+            stats_grid = QGridLayout(stats_panel)
+            stats_grid.addWidget(metric_card(
+                f"{home_name} wins", home_wins, f"{home_wins / count:.0%} of completed meetings"
+            ), 0, 0)
+            stats_grid.addWidget(metric_card(
+                "Draws", draws, f"{draws / count:.0%} of completed meetings"
+            ), 0, 1)
+            stats_grid.addWidget(metric_card(
+                f"{away_name} wins", away_wins, f"{away_wins / count:.0%} of completed meetings"
+            ), 0, 2)
+            stats_grid.addWidget(metric_card(
+                "Average total goals", f"{total_goals / count:.2f}", "Goals per meeting"
+            ), 1, 0)
+            stats_grid.addWidget(metric_card(
+                "Over 2.5 goals", f"{over_25 / count:.0%}", f"{over_25} of {count} meetings"
+            ), 1, 1)
+            stats_grid.addWidget(metric_card(
+                "Both teams scored", f"{btts / count:.0%}", f"{btts} of {count} meetings"
+            ), 1, 2)
+            layout.addWidget(stats_panel)
+        else:
+            note = QLabel("No completed previous meetings were found in the accessible seasons.")
+            note.setWordWrap(True)
+            note.setStyleSheet("color:#94A9C7;padding:8px")
+            layout.addWidget(note)
+
         h2h_table = QTableWidget(len(h2h_rows), 5)
-        h2h_table.setHorizontalHeaderLabels(["Date", "Competition", "Home Team", "Score", "Away Team"])
+        h2h_table.setHorizontalHeaderLabels(
+            ["Date", "Competition", "Home Team", "Score", "Away Team"]
+        )
         h2h_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         h2h_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
         h2h_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         enable_table_copy(h2h_table)
         for row_index, record in enumerate(h2h_rows):
-            fixture_id, match_date, competition, hteam, ateam, hg, ag = record
-            values = [match_date, competition, hteam, f"{hg}–{ag}" if hg is not None and ag is not None else "—", ateam]
+            _fixture_id, match_date, league, hteam, ateam, hg, ag = record
+            values = [
+                match_date, league, hteam,
+                f"{hg}–{ag}" if hg is not None and ag is not None else "—",
+                ateam
+            ]
             for column, value in enumerate(values):
                 h2h_table.setItem(row_index, column, QTableWidgetItem(str(value)))
         h2h_table.resizeColumnsToContents()
         layout.addWidget(h2h_table)
+
         if h2h_error:
             note = QLabel(f"Head-to-head data unavailable: {h2h_error}")
             note.setWordWrap(True)
+            note.setTextInteractionFlags(selectable)
             layout.addWidget(note)
         elif not h2h_rows:
-            layout.addWidget(QLabel("No previous completed meetings were found in the accessible seasons."))
+            note = QLabel("No previous completed meetings were found in the accessible seasons.")
+            note.setWordWrap(True)
+            layout.addWidget(note)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dialog.reject)
         buttons.accepted.connect(dialog.accept)
