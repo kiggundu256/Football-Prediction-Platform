@@ -14,7 +14,7 @@ class HeadToHeadTests(unittest.TestCase):
         self.assertEqual(result["played"], 3)
         self.assertEqual((result["home_wins"], result["draws"], result["away_wins"]), (1, 1, 1))
         self.assertEqual((result["home_goals"], result["away_goals"]), (3, 4))
-        self.assertAlmostEqual(result["btts"], 1 / 3)
+        self.assertAlmostEqual(result["btts"], 2 / 3)
 
     def test_empty_meetings_return_safe_zero_values(self):
         result = summarize_head_to_head([], 1, 2)
