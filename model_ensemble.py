@@ -34,7 +34,7 @@ def _form_probabilities(home_profile, away_profile, home_advantage=0.12):
     }
 
 
-def predict_ensemble(home_profile, away_profile, home_advantage=0.12):
+def predict_ensemble(home_profile, away_profile, home_advantage=0.12, ml_probabilities=None, ml_samples=0):
     """Return goal probabilities and a blended 1X2 forecast with model evidence."""
     if not home_profile or not away_profile:
         raise ValueError("Both teams need completed historical match profiles.")
@@ -48,10 +48,24 @@ def predict_ensemble(home_profile, away_profile, home_advantage=0.12):
     )
     goal_model = predict_markets(home_xg, away_xg)
     form_model = _form_probabilities(home_profile, away_profile, home_advantage)
-    # Goal distribution is the primary signal; recent form provides a restrained adjustment.
-    form_weight = 0.25
+    # A trained ML model contributes only after enough verified local outcomes exist.
+    ml_active = bool(ml_probabilities and all(key in ml_probabilities for key in ("home_win", "draw", "away_win")))
+    goal_weight, form_weight, ml_weight = (0.60, 0.20, 0.20) if ml_active else (0.75, 0.25, 0.0)
+    components = {"goal_distribution": goal_model, "recent_form": form_model}
+    if ml_active:
+        ml_total = sum(max(0.0, float(ml_probabilities[key])) for key in ("home_win", "draw", "away_win"))
+        if ml_total > 0:
+            ml_probabilities = {
+                key: max(0.0, float(ml_probabilities[key])) / ml_total
+                for key in ("home_win", "draw", "away_win")
+            }
+            components["trained_machine_learning"] = ml_probabilities
+        else:
+            ml_active = False
+            goal_weight, form_weight, ml_weight = 0.75, 0.25, 0.0
     ensemble_1x2 = {
-        key: (1 - form_weight) * goal_model[key] + form_weight * form_model[key]
+        key: goal_weight * goal_model[key] + form_weight * form_model[key]
+        + (ml_weight * ml_probabilities[key] if ml_active else 0.0)
         for key in ("home_win", "draw", "away_win")
     }
     total_samples = int(home_profile.get("played", 0)) + int(away_profile.get("played", 0))
@@ -67,15 +81,18 @@ def predict_ensemble(home_profile, away_profile, home_advantage=0.12):
             "away_win": goal_model["away_win"],
         },
         "recent_form": form_model,
-        "weights": {"goal_distribution": 1 - form_weight, "recent_form": form_weight},
+        **({"trained_machine_learning": components["trained_machine_learning"]} if ml_active else {}),
+        "weights": {"goal_distribution": goal_weight, "recent_form": form_weight, "trained_machine_learning": ml_weight},
     }
-    markets["model"] = "Explainable ensemble: Poisson goals + recent-form strength"
+    markets["model"] = ("Ensemble: Poisson + recent form + trained local ML"
+                        if ml_active else "Ensemble: Poisson goals + recent-form strength")
     markets["model_quality"] = {
         "confidence_band": confidence,
         "minimum_team_sample": minimum_samples,
         "total_team_matches": total_samples,
         "coverage_score": coverage,
-        "trained_ml_model": False,
+        "trained_ml_model": ml_active,
+        "ml_training_samples": int(ml_samples) if ml_active else 0,
         "note": "Model weights are initial baselines and require chronological backtesting and calibration.",
     }
     return {
@@ -83,6 +100,7 @@ def predict_ensemble(home_profile, away_profile, home_advantage=0.12):
         "away_xg": away_xg,
         "goal_model": goal_model,
         "form_model": form_model,
+        "machine_learning_model": components.get("trained_machine_learning"),
         "markets": markets,
         "model_quality": markets["model_quality"],
     }

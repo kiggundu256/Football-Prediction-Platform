@@ -16,10 +16,18 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QScrollArea, QSpinBox, QTabWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget
 )
-from api_football import ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures
-from prediction_engine import predict_markets
+from api_football import (
+    ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures,
+    fetch_head_to_head_fixtures, fetch_fixture_by_id,
+    fetch_fixture_corner_statistics, fetch_fixture_injuries,
+    fetch_fixture_lineups, fetch_venue_details,
+)
+from corners_engine import predict_corner_markets
+from model_ensemble import predict_ensemble
+from machine_learning import build_model_features, train_outcome_model, predict_outcome
+from fixture_intelligence import summarize_injuries, summarize_lineups
+from weather_client import fetch_match_weather
 from analysis_explainer import team_profile, build_analysis_explanation
-from api_football import fetch_head_to_head_fixtures, fetch_fixture_by_id
 from head_to_head import summarize_head_to_head
 from ui_theme import APP_STYLESHEET
 from settlement import settle_markets
@@ -419,6 +427,12 @@ class MainWindow(QMainWindow):
         self.demo_fixtures_button = QPushButton("Load Demo Fixtures")
         self.demo_fixtures_button.clicked.connect(self.load_demo_fixtures)
         controls.addWidget(self.demo_fixtures_button)
+        self.intelligence_button = QPushButton("Load Match Intelligence")
+        self.intelligence_button.setToolTip(
+            "Fetch and cache injuries, lineups, venue weather and historical corner statistics for the selected fixture."
+        )
+        self.intelligence_button.clicked.connect(self.load_selected_match_intelligence)
+        controls.addWidget(self.intelligence_button)
         self.analyze_fixture_button = QPushButton("Analyze Selected Match")
         self.analyze_fixture_button.clicked.connect(self.analyze_selected_fixture)
         controls.addWidget(self.analyze_fixture_button)
@@ -781,6 +795,155 @@ class MainWindow(QMainWindow):
         self.refresh_dashboard()
 
 
+    def cached_provider_data(self, cache_key, fetcher, ttl_seconds):
+        cached = self.store.get_provider_cache(cache_key, ttl_seconds)
+        if cached is not None:
+            return cached
+        data = fetcher()
+        self.store.save_provider_cache(cache_key, data)
+        return data
+
+    def selected_fixture(self):
+        row = self.live_table.currentRow()
+        if row < 0 or row >= len(self.visible_fixtures):
+            return None
+        return self.visible_fixtures[row]
+
+    def load_selected_match_intelligence(self):
+        item = self.selected_fixture()
+        if not item:
+            QMessageBox.information(self, "Select a match", "Select a fixture first.")
+            return
+        if self.fixture_data_mode == "demo":
+            self.match_intelligence.setText("DEMO DATA — no real injuries, lineups, weather or corner statistics are attached.")
+            return
+        fixture = item.get("fixture") or {}
+        fixture_id = fixture.get("id")
+        if not fixture_id:
+            QMessageBox.information(self, "Fixture ID missing", "This fixture has no provider ID.")
+            return
+        key = self.get_api_key()
+        if not key:
+            QMessageBox.information(self, "API key needed", "Set your API key before loading match intelligence.")
+            return
+        teams = item.get("teams") or {}
+        home = teams.get("home") or {}
+        away = teams.get("away") or {}
+        home_id, away_id = home.get("id"), away.get("id")
+        match_date = (fixture.get("date") or "")[:10]
+        self.intelligence_button.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        notes = []
+        injuries, lineups, weather, corner_averages = [], [], None, None
+        try:
+            try:
+                injuries = self.cached_provider_data(
+                    f"injuries:{fixture_id}",
+                    lambda: fetch_fixture_injuries(fixture_id, api_key=key), 30 * 60
+                )
+            except ApiFootballError as exc:
+                notes.append(f"Injuries unavailable: {exc}")
+            try:
+                lineups = self.cached_provider_data(
+                    f"lineups:{fixture_id}",
+                    lambda: fetch_fixture_lineups(fixture_id, api_key=key), 10 * 60
+                )
+            except ApiFootballError as exc:
+                notes.append(f"Lineups unavailable: {exc}")
+
+            venue = fixture.get("venue") or {}
+            venue_data = None
+            if venue.get("id"):
+                try:
+                    venue_data = self.cached_provider_data(
+                        f"venue:{venue['id']}",
+                        lambda: fetch_venue_details(venue["id"], api_key=key),
+                        30 * 24 * 60 * 60,
+                    )
+                except ApiFootballError as exc:
+                    notes.append(f"Venue details unavailable: {exc}")
+            venue_data = venue_data or {}
+            latitude, longitude = venue_data.get("latitude"), venue_data.get("longitude")
+            if latitude is not None and longitude is not None and fixture.get("date"):
+                weather = self.cached_provider_data(
+                    f"weather:{latitude}:{longitude}:{match_date}",
+                    lambda: fetch_match_weather(latitude, longitude, fixture["date"]),
+                    60 * 60,
+                )
+            else:
+                notes.append("Weather unavailable: venue coordinates were not supplied.")
+
+            recent = {}
+            for side, team_id in (("home", home_id), ("away", away_id)):
+                try:
+                    recent[side] = self.cached_provider_data(
+                        f"team_recent:{team_id}:{match_date}:5",
+                        lambda tid=team_id: fetch_recent_team_fixtures(
+                            tid, api_key=key, last=5, before_date=match_date
+                        ),
+                        7 * 24 * 60 * 60,
+                    )
+                except ApiFootballError as exc:
+                    recent[side] = []
+                    notes.append(f"{side.title()} history unavailable: {exc}")
+
+            corner_data = {"home_for": [], "home_against": [], "away_for": [], "away_against": []}
+            for side, team_id, fixtures in (
+                ("home", home_id, recent.get("home", [])),
+                ("away", away_id, recent.get("away", [])),
+            ):
+                for old_match in fixtures[:3]:
+                    old_fixture = old_match.get("fixture") or {}
+                    old_id = old_fixture.get("id")
+                    old_teams = old_match.get("teams") or {}
+                    old_home, old_away = old_teams.get("home") or {}, old_teams.get("away") or {}
+                    opponent_id = old_away.get("id") if old_home.get("id") == team_id else old_home.get("id")
+                    if not old_id or not opponent_id:
+                        continue
+                    try:
+                        stats = self.cached_provider_data(
+                            f"corners:{old_id}",
+                            lambda fid=old_id: fetch_fixture_corner_statistics(fid, api_key=key),
+                            30 * 24 * 60 * 60,
+                        )
+                    except ApiFootballError as exc:
+                        notes.append(f"Some historical corner data unavailable: {exc}")
+                        continue
+                    own = stats.get(str(team_id), stats.get(team_id))
+                    against = stats.get(str(opponent_id), stats.get(opponent_id))
+                    if own is not None and against is not None:
+                        corner_data[f"{side}_for"].append(float(own))
+                        corner_data[f"{side}_against"].append(float(against))
+            if all(len(corner_data[f"{side}_for"]) >= 2 for side in ("home", "away")):
+                corner_averages = {
+                    key_name: sum(values) / len(values)
+                    for key_name, values in corner_data.items() if values
+                }
+                self.store.save_provider_cache(f"corner_averages:{fixture_id}", corner_averages)
+            else:
+                notes.append("Corner predictions need at least two observed historical matches for each team.")
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.intelligence_button.setEnabled(True)
+
+        injury_text = summarize_injuries(injuries)
+        lineup_text = summarize_lineups(lineups)
+        referee = fixture.get("referee") or "Not supplied"
+        weather_text = (
+            f"{weather.get('temperature_c', '—')}°C, rain chance "
+            f"{weather.get('precipitation_probability', '—')}%, wind "
+            f"{weather.get('wind_speed_kmh', '—')} km/h"
+            if weather else "Unavailable"
+        )
+        corner_text = "Loaded" if corner_averages else "Insufficient / unavailable"
+        self.match_intelligence.setText(
+            f"Injuries: {injury_text}  •  Lineups: {lineup_text}  •  Referee: {referee}  •  "
+            f"Weather: {weather_text}  •  Corner data: {corner_text}"
+            + (("\n" + "\n".join(notes[:4])) if notes else "")
+        )
+        self.api_message.setText("Match intelligence loaded. Cached data will be reused; review unavailable items.")
+        self.update_api_status()
+
     def analyze_selected_fixture(self):
         if self.fixture_data_mode == "demo":
             QMessageBox.information(
@@ -806,15 +969,23 @@ class MainWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             fixture_date = ((item.get("fixture") or {}).get("date") or "")[:10]
-            home_recent = fetch_recent_team_fixtures(
-                home_id, api_key=key, last=5, before_date=fixture_date
+            home_recent = self.cached_provider_data(
+                f"team_recent:{home_id}:{fixture_date}:5",
+                lambda: fetch_recent_team_fixtures(home_id, api_key=key, last=5, before_date=fixture_date),
+                7 * 24 * 60 * 60,
             )
-            away_recent = fetch_recent_team_fixtures(
-                away_id, api_key=key, last=5, before_date=fixture_date
+            away_recent = self.cached_provider_data(
+                f"team_recent:{away_id}:{fixture_date}:5",
+                lambda: fetch_recent_team_fixtures(away_id, api_key=key, last=5, before_date=fixture_date),
+                7 * 24 * 60 * 60,
             )
             try:
-                h2h_matches = fetch_head_to_head_fixtures(
-                    home_id, away_id, api_key=key, before_date=fixture_date, limit=10
+                h2h_matches = self.cached_provider_data(
+                    f"h2h:{home_id}:{away_id}:{fixture_date}:10",
+                    lambda: fetch_head_to_head_fixtures(
+                        home_id, away_id, api_key=key, before_date=fixture_date, limit=10
+                    ),
+                    7 * 24 * 60 * 60,
                 )
                 h2h_error = None
             except ApiFootballError as h2h_exc:
@@ -855,9 +1026,31 @@ class MainWindow(QMainWindow):
             self.api_message.setText("Not enough completed results with scores to calculate a form-based estimate.")
             return
 
-        home_xg = max(0.05, (hr["scored_avg"] + ar["conceded_avg"]) / 2)
-        away_xg = max(0.05, (ar["scored_avg"] + hr["conceded_avg"]) / 2)
-        markets = predict_markets(home_xg, away_xg)
+        home_xg_seed = max(0.05, (hr["scored_avg"] + ar["conceded_avg"]) / 2)
+        away_xg_seed = max(0.05, (ar["scored_avg"] + hr["conceded_avg"]) / 2)
+        model_features = build_model_features(hr, ar, home_xg_seed, away_xg_seed)
+        local_ml = train_outcome_model(self.store.training_records())
+        ml_probabilities = predict_outcome(local_ml, model_features) if local_ml else None
+        ensemble = predict_ensemble(
+            hr, ar, ml_probabilities=ml_probabilities,
+            ml_samples=local_ml["samples"] if local_ml else 0,
+        )
+        home_xg, away_xg = ensemble["home_xg"], ensemble["away_xg"]
+        markets = ensemble["markets"]
+        corner_averages = self.store.get_provider_cache(
+            f"corner_averages:{(item.get('fixture') or {}).get('id')}",
+            30 * 24 * 60 * 60,
+        )
+        if corner_averages:
+            try:
+                markets["corners"] = predict_corner_markets(
+                    corner_averages["home_for"], corner_averages["home_against"],
+                    corner_averages["away_for"], corner_averages["away_against"],
+                )
+            except (KeyError, TypeError, ValueError):
+                markets["corner_data_status"] = "Insufficient valid historical corner data"
+        else:
+            markets["corner_data_status"] = "Not loaded — use Load Match Intelligence first"
         fixture_info = {
             "competition": (item.get("league") or {}).get("name", "Unknown"),
             "home_team": home_name,
@@ -871,7 +1064,8 @@ class MainWindow(QMainWindow):
         )
         try:
             prediction_id = self.store.save_analysis(
-                fixture_info, home_xg, away_xg, markets, source_matches, h2h_matches
+                fixture_info, home_xg, away_xg, markets, source_matches, h2h_matches,
+                features=model_features
             )
         except sqlite3.Error as exc:
             QMessageBox.critical(
@@ -884,6 +1078,19 @@ class MainWindow(QMainWindow):
         explanation = build_analysis_explanation(
             home_name, away_name, hr, ar, home_xg, away_xg, markets
         )
+        if markets.get("corners"):
+            corner_model = markets["corners"]
+            explanation.extend([
+                f"Corner estimate: {corner_model['home_expected']:.2f} for {home_name}, "
+                f"{corner_model['away_expected']:.2f} for {away_name}; total "
+                f"{corner_model['total_expected']:.2f}.",
+                "Corner probabilities use observed corners-for and corners-against averages from completed matches.",
+            ])
+        if markets.get("model_quality", {}).get("trained_ml_model"):
+            explanation.append(
+                f"A local ML model trained on {markets['model_quality']['ml_training_samples']} "
+                "settled examples contributes to the 1X2 probabilities."
+            )
         report = (
             f"{home_name} vs {away_name}\\n"
             f"{(item.get('league') or {}).get('name', 'Unknown')} • Analysis #{prediction_id}\\n\\n"
@@ -916,14 +1123,15 @@ class MainWindow(QMainWindow):
             self.store.h2h_matches(prediction_id),
             h2h_error, competition=fixture_info["competition"],
             home_profile=hr, away_profile=ar, home_xg=home_xg,
-            away_xg=away_xg, markets=markets, explanation=explanation
+            away_xg=away_xg, markets=markets, explanation=explanation,
+            model_quality=ensemble["model_quality"]
         )
 
     def show_analysis_dialog(
         self, report, prediction_id, home_name, away_name, home_rows,
         away_rows, h2h_rows, h2h_error=None, *, competition="",
         home_profile=None, away_profile=None, home_xg=0.0,
-        away_xg=0.0, markets=None, explanation=None
+        away_xg=0.0, markets=None, explanation=None, model_quality=None
     ):
         """Show the forecast as a structured, selectable analytics report."""
         dialog = QDialog(self)
@@ -1055,7 +1263,35 @@ class MainWindow(QMainWindow):
                 ("Yes", markets["btts_yes"]),
                 ("No", markets["btts_no"]),
             ])
+            corner_markets = markets.get("corners")
+            if corner_markets:
+                for title, key_name in (
+                    ("TOTAL CORNERS", "over"),
+                    ("HOME CORNERS", "home_over"),
+                    ("AWAY CORNERS", "away_over"),
+                ):
+                    add_market_row(title, [
+                        (f"Over {line}", probability)
+                        for line, probability in corner_markets[key_name].items()
+                    ])
+            else:
+                note = QLabel("Corner markets: " + markets.get("corner_data_status", "not available"))
+                note.setWordWrap(True)
+                outcome_layout.addWidget(note)
             layout.addWidget(outcome_panel)
+
+            section_title("MODEL ENSEMBLE & DATA QUALITY")
+            quality = model_quality or markets.get("model_quality", {})
+            quality_text = QLabel(
+                f"Models: {markets.get('model', 'Poisson baseline')}\\n"
+                f"Completed matches per team: {quality.get('minimum_team_sample', 0)}\\n"
+                f"Confidence band: {quality.get('confidence_band', 'Not assessed')}\\n"
+                f"Trained local ML: {'Active' if quality.get('trained_ml_model') else 'Waiting for 200 settled examples'}"
+            )
+            quality_text.setWordWrap(True)
+            quality_text.setTextInteractionFlags(selectable)
+            quality_text.setStyleSheet("background:#111D30;padding:12px;border:1px solid #26364D;border-radius:8px")
+            layout.addWidget(quality_text)
 
             section_title("MOST LIKELY SCORELINES")
             score_panel = panel()
@@ -1400,7 +1636,22 @@ class MainWindow(QMainWindow):
                 home_goals, away_goals = goals.get("home"), goals.get("away")
                 if home_goals is None or away_goals is None:
                     continue
-                outcomes = settle_markets(json.loads(markets_json), home_goals, away_goals)
+                saved_markets = json.loads(markets_json)
+                home_corners = away_corners = None
+                if saved_markets.get("corners"):
+                    try:
+                        corner_stats = fetch_fixture_corner_statistics(fixture_id, api_key=key)
+                        match_teams = match.get("teams") or {}
+                        home_id = (match_teams.get("home") or {}).get("id")
+                        away_id = (match_teams.get("away") or {}).get("id")
+                        home_corners = corner_stats.get(str(home_id), corner_stats.get(home_id))
+                        away_corners = corner_stats.get(str(away_id), corner_stats.get(away_id))
+                    except ApiFootballError:
+                        pass
+                outcomes = settle_markets(
+                    saved_markets, home_goals, away_goals,
+                    home_corners=home_corners, away_corners=away_corners
+                )
                 self.store.settle_prediction(prediction_id, home_goals, away_goals, outcomes)
                 settled += 1
         except ApiFootballError as exc:
