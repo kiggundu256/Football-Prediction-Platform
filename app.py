@@ -268,8 +268,13 @@ class MainWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             fixture_date = ((item.get('fixture') or {}).get('date') or '')[:10]
-            home_recent = fetch_recent_team_fixtures(home_id, api_key=key, last=5, before_date=fixture_date)
-            away_recent = fetch_recent_team_fixtures(away_id, api_key=key, last=5, before_date=fixture_date)
+            competition_season = (item.get('league') or {}).get('season')
+            home_recent = fetch_recent_team_fixtures(
+                home_id, api_key=key, last=5, before_date=fixture_date, season=competition_season
+            )
+            away_recent = fetch_recent_team_fixtures(
+                away_id, api_key=key, last=5, before_date=fixture_date, season=competition_season
+            )
         except ApiFootballError as exc:
             QMessageBox.warning(self, "Form data unavailable", str(exc))
             self.api_message.setText(str(exc))
