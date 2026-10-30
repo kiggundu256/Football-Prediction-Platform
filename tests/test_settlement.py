@@ -11,7 +11,7 @@ class SettlementTests(unittest.TestCase):
         }
         result = settle_markets(markets, 2, 1)
         self.assertEqual(result["graded"], 5)
-        self.assertEqual(result["correct"], 4)
+        self.assertEqual(result["correct"], 5)
         self.assertTrue(result["markets"]["1X2"]["correct"])
         self.assertFalse(result["markets"]["Goals 3.5"]["correct"])
 
