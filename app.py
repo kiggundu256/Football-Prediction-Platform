@@ -8,6 +8,7 @@ from pathlib import Path
 
 import keyring
 from PySide6.QtCore import Qt, QDate
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFormLayout,
     QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
@@ -174,6 +175,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.tabs); self.setCentralWidget(root)
         self.refresh_history()
         self.update_api_status()
+        enable_text_selection(self)
 
     def dashboard(self):
         page = QWidget(); box = QVBoxLayout(page); grid = QGridLayout()
@@ -187,7 +189,7 @@ class MainWindow(QMainWindow):
                      "3. Forecasts are saved locally; existing history is preserved.",
                      "4. Live data coverage depends on the API provider plan and competition."]:
             label = QLabel(text); label.setWordWrap(True)
-            label.setStyleSheet("background:white;padding:12px;border-radius:6px")
+            label.setStyleSheet("background:#111D30;padding:12px;border:1px solid #26364D;border-radius:6px")
             box.addWidget(label)
         box.addStretch(); return page
 
@@ -212,7 +214,9 @@ class MainWindow(QMainWindow):
         self.live_table = QTableWidget(0, 5)
         self.live_table.setHorizontalHeaderLabels(["Kick-off (provider time)", "Competition", "Home", "Away", "Status"])
         self.live_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.live_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.live_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self.live_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        enable_table_copy(self.live_table)
         self.live_table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.live_table, 1)
         return page
@@ -444,6 +448,10 @@ class MainWindow(QMainWindow):
         summary = QLabel(report)
         summary.setWordWrap(True)
         summary.setStyleSheet("background:#111D30;padding:14px;border:1px solid #26364D;border-radius:8px")
+        summary.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         layout.addWidget(summary)
 
         heading = QLabel(f"Historical matches used • Analysis #{prediction_id}")
@@ -461,7 +469,9 @@ class MainWindow(QMainWindow):
                 ["Date", "Competition", "Venue", "Opponent", "Score", "Result"]
             )
             table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+            table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+            enable_table_copy(table)
             table.horizontalHeader().setStretchLastSection(True)
             for row_index, record in enumerate(rows):
                 (_side, _fixture_id, match_date, competition, home_team, away_team,
@@ -531,6 +541,9 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["Saved UTC", "Competition", "Home", "Away", "Home xG", "Away xG"])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        enable_table_copy(self.table)
         self.table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.table)
         refresh = QPushButton("Refresh history"); refresh.clicked.connect(self.refresh_history); box.addWidget(refresh)
@@ -550,6 +563,36 @@ class MainWindow(QMainWindow):
             vals = [row[0].replace("T", " ")[:19], row[1], row[2], row[3], f"{row[4]:.2f}", f"{row[5]:.2f}"]
             for j, value in enumerate(vals): self.table.setItem(i, j, QTableWidgetItem(str(value)))
         if hasattr(self, "saved_card"): self.saved_card.value_label.setText(str(len(rows)))
+
+
+def enable_text_selection(root):
+    """Make every label in a window/dialog selectable with mouse and keyboard."""
+    flags = (
+        Qt.TextInteractionFlag.TextSelectableByMouse
+        | Qt.TextInteractionFlag.TextSelectableByKeyboard
+    )
+    for label in root.findChildren(QLabel):
+        label.setTextInteractionFlags(flags)
+
+
+def enable_table_copy(table):
+    """Allow selecting individual table cells and copying them with Ctrl+C."""
+    def copy_selected_cells():
+        indexes = table.selectedIndexes()
+        if not indexes:
+            return
+        rows = {}
+        for index in indexes:
+            rows.setdefault(index.row(), {})[index.column()] = index.data() or ""
+        text = "\\n".join(
+            "\\t".join(rows[row].get(column, "") for column in range(table.columnCount()))
+            for row in sorted(rows)
+        )
+        QApplication.clipboard().setText(text)
+
+    shortcut = QShortcut(QKeySequence.StandardKey.Copy, table)
+    shortcut.activated.connect(copy_selected_cells)
+    table._copy_shortcut = shortcut
 
 
 def main():
