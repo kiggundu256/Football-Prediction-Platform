@@ -216,11 +216,13 @@ class Card(QFrame):
         super().__init__()
         self.setStyleSheet("QFrame{background:#111D30;border:1px solid #26364D;border-radius:10px}")
         box = QVBoxLayout(self)
-        a, self.value_label, c = QLabel(title), QLabel(value), QLabel(note)
-        a.setStyleSheet("color:#94A9C7;border:0")
-        self.value_label.setStyleSheet("font-size:23px;font-weight:700;color:#168BFF;border:0")
-        c.setStyleSheet("color:#94A9C7;border:0")
-        box.addWidget(a); box.addWidget(self.value_label); box.addWidget(c)
+        self.title_label = QLabel(title)
+        self.value_label = QLabel(value)
+        self.note_label = QLabel(note)
+        self.title_label.setStyleSheet("color:#94A9C7;border:0;font-size:11px;font-weight:700")
+        self.value_label.setStyleSheet("font-size:25px;font-weight:800;color:#168BFF;border:0")
+        self.note_label.setStyleSheet("color:#94A9C7;border:0;font-size:11px")
+        box.addWidget(self.title_label); box.addWidget(self.value_label); box.addWidget(self.note_label)
 
 
 class MainWindow(QMainWindow):
@@ -253,20 +255,75 @@ class MainWindow(QMainWindow):
         enable_text_selection(self)
 
     def dashboard(self):
-        page = QWidget(); box = QVBoxLayout(page); grid = QGridLayout()
-        self.fixtures_card = Card("SAMPLE FIXTURES", str(len(FIXTURES)), "Illustrative only")
-        self.saved_card = Card("SAVED FORECASTS", "0", "Stored on this PC")
-        self.api_card = Card("API STATUS", "Not configured", "Key stored in Windows Credential Manager")
-        grid.addWidget(self.fixtures_card, 0, 0); grid.addWidget(self.saved_card, 0, 1); grid.addWidget(self.api_card, 0, 2)
+        page = QWidget(); box = QVBoxLayout(page)
+        intro = QLabel("Your football forecasting workspace")
+        intro.setStyleSheet("font-size:19px;font-weight:700;color:#EAF2FF")
+        box.addWidget(intro)
+        subtitle = QLabel("A live snapshot of fixtures, saved analysis and verified prediction performance.")
+        subtitle.setStyleSheet("color:#94A9C7")
+        box.addWidget(subtitle)
+
+        grid = QGridLayout()
+        self.fixtures_card = Card("LOADED FIXTURES", "0", "Load a date in Live Fixtures")
+        self.saved_card = Card("REAL PREDICTIONS", "0", "Saved from provider fixtures")
+        self.pending_card = Card("PENDING RESULTS", "0", "Awaiting verified final scores")
+        self.api_card = Card("MARKET ACCURACY", "—", "Based on settled real predictions")
+        for col, card in enumerate((self.fixtures_card, self.saved_card, self.pending_card, self.api_card)):
+            grid.addWidget(card, 0, col)
         box.addLayout(grid)
-        for text in ["1. Load provider fixtures for a selected date in Live Fixtures.",
-                     "2. Sample xG predictions remain illustrative until real historical statistics are integrated.",
-                     "3. Forecasts are saved locally; existing history is preserved.",
-                     "4. Live data coverage depends on the API provider plan and competition."]:
-            label = QLabel(text); label.setWordWrap(True)
-            label.setStyleSheet("background:#111D30;padding:12px;border:1px solid #26364D;border-radius:6px")
-            box.addWidget(label)
-        box.addStretch(); return page
+
+        recent_heading = QLabel("RECENT PREDICTIONS")
+        recent_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
+        box.addWidget(recent_heading)
+        self.dashboard_recent_table = QTableWidget(0, 5)
+        self.dashboard_recent_table.setHorizontalHeaderLabels(
+            ["Saved (UTC)", "Competition", "Match", "Expected goals", "Status"]
+        )
+        self.dashboard_recent_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.dashboard_recent_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.dashboard_recent_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.dashboard_recent_table.horizontalHeader().setStretchLastSection(True)
+        self.dashboard_recent_table.setMaximumHeight(245)
+        enable_table_copy(self.dashboard_recent_table)
+        box.addWidget(self.dashboard_recent_table)
+
+        quick_heading = QLabel("QUICK ACCESS")
+        quick_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
+        box.addWidget(quick_heading)
+        actions = QHBoxLayout()
+        for label, index in (("Load Fixtures", 1), ("Match Analysis", 2),
+                             ("Prediction History", 3), ("Performance Lab", 4)):
+            button = QPushButton(label)
+            button.clicked.connect(lambda checked=False, tab=index: self.tabs.setCurrentIndex(tab))
+            actions.addWidget(button)
+        box.addLayout(actions)
+        box.addStretch()
+        return page
+
+    def refresh_dashboard(self):
+        if not hasattr(self, "dashboard_recent_table"):
+            return
+        records = self.store.performance_records()
+        pending = sum(1 for record in records if record[1] == "pending")
+        summary = summarize_performance(records)
+        self.fixtures_card.value_label.setText(str(len(getattr(self, "live_fixtures", []))))
+        self.saved_card.value_label.setText(str(len(records)))
+        self.pending_card.value_label.setText(str(pending))
+        accuracy = summary["accuracy"]
+        self.api_card.value_label.setText(f"{accuracy:.1%}" if accuracy is not None else "—")
+        self.api_card.note_label.setText("Correct graded markets / all graded markets")
+
+        rows = self.store.history()[:6]
+        table = self.dashboard_recent_table
+        table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            saved = row[0].replace("T", " ")[:16]
+            match = f"{row[2]} vs {row[3]}"
+            expected = f"{row[4]:.2f} - {row[5]:.2f}"
+            status = row[6].replace("_", " ").title()
+            values = (saved, row[1], match, expected, status)
+            for col, value in enumerate(values):
+                table.setItem(row_index, col, QTableWidgetItem(str(value)))
 
     def live_fixtures_page(self):
         page = QWidget(); box = QVBoxLayout(page)
@@ -395,8 +452,7 @@ class MainWindow(QMainWindow):
             for j, value in enumerate(values):
                 self.live_table.setItem(i, j, QTableWidgetItem(str(value)))
         self.api_message.setText(f"Loaded {len(fixtures)} fixtures for {date}. Provider coverage and completeness depend on your plan.")
-        self.fixtures_card.value_label.setText(str(len(fixtures)))
-        self.fixtures_card.title_label.setText("LIVE FIXTURES") if hasattr(self.fixtures_card, "title_label") else None
+        self.refresh_dashboard()
 
 
     def analyze_selected_fixture(self):
@@ -985,8 +1041,8 @@ class MainWindow(QMainWindow):
             vals = [row[0].replace("T", " ")[:19], row[1], row[2], row[3],
                     f"{row[4]:.2f}", f"{row[5]:.2f}", row[6], score, record]
             for j, value in enumerate(vals): self.table.setItem(i, j, QTableWidgetItem(str(value)))
-        if hasattr(self, "saved_card"): self.saved_card.value_label.setText(str(len(rows)))
         self.refresh_performance()
+        self.refresh_dashboard()
 
     def refresh_match_results(self):
         key = self.get_api_key()
