@@ -38,7 +38,7 @@ class ApiFootballTests(unittest.TestCase):
         response.json.return_value = {"response": [], "errors": {"plan": "Access denied for this endpoint"}}
         get.return_value = response
         with self.assertRaisesRegex(ApiFootballError, "Access denied for this endpoint"):
-            fetch_recent_team_fixtures(10, api_key="test-key", last=5)
+            fetch_recent_team_fixtures(10, api_key="test-key", last=5, season=2026)
 
     @patch("api_football.requests.get", side_effect=requests.Timeout())
     def test_network_error_does_not_leak_request_details(self, get):
@@ -57,10 +57,11 @@ class ApiFootballTests(unittest.TestCase):
             {"fixture": {"id": 122, "date": "2026-10-18T18:00:00+00:00", "status": {"short": "FT"}}},
         ], "errors": []}
         get.return_value = response
-        result = fetch_recent_team_fixtures(10, api_key="test-key", last=5, before_date="2026-10-30")
+        result = fetch_recent_team_fixtures(10, api_key="test-key", last=5, before_date="2026-10-30", season=2026)
         self.assertEqual([m["fixture"]["id"] for m in result], [123, 122])
         params = get.call_args.kwargs["params"]
         self.assertEqual(params["team"], 10)
+        self.assertEqual(params["season"], 2026)
         self.assertEqual(params["to"], "2026-10-29")
         self.assertNotIn("last", params)
 
