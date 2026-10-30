@@ -82,12 +82,6 @@ class StoreSourceMatchTests(unittest.TestCase):
         self.assertEqual(cached, updated)
         self.assertIsNone(self.store.get_fixture_cache("2026-11-01"))
 
-    def test_fixture_request_counter_tracks_local_attempts(self):
-        before = self.store.fixture_requests_today()
-        self.store.record_fixture_request()
-        self.store.record_fixture_request()
-        self.assertEqual(self.store.fixture_requests_today(), before + 2)
-
     def test_existing_prediction_history_is_preserved(self):
         # Store initialization creates the current schema. Insert a legacy
         # prediction into it, then initialize Store again as an app restart.

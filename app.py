@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import keyring
+from api_usage import api_requests_today
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -96,10 +97,6 @@ class Store:
                 fixture_date TEXT PRIMARY KEY,
                 fixtures_json TEXT NOT NULL,
                 cached_at_utc TEXT NOT NULL
-            )""")
-            db.execute("""CREATE TABLE IF NOT EXISTS api_fixture_request_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                requested_at_utc TEXT NOT NULL
             )""")
 
 
@@ -213,19 +210,6 @@ class Store:
             row = db.execute("""SELECT fixtures_json, cached_at_utc FROM fixture_cache
                 WHERE fixture_date = ?""", (fixture_date,)).fetchone()
         return (json.loads(row[0]), row[1]) if row else None
-
-    def record_fixture_request(self):
-        """Record one locally initiated fixture-list request (not provider quota)."""
-        with self.connect() as db:
-            db.execute("INSERT INTO api_fixture_request_log (requested_at_utc) VALUES (?)",
-                       (datetime.now(timezone.utc).isoformat(),))
-
-    def fixture_requests_today(self):
-        """Count this app's fixture-list request attempts since UTC midnight."""
-        today = datetime.now(timezone.utc).date().isoformat()
-        with self.connect() as db:
-            return db.execute("""SELECT COUNT(*) FROM api_fixture_request_log
-                WHERE substr(requested_at_utc, 1, 10) = ?""", (today,)).fetchone()[0]
 
     def predicted_fixture_ids(self):
         """Return provider fixture IDs that already have a saved real prediction."""
@@ -631,7 +615,7 @@ class MainWindow(QMainWindow):
             self.api_card.value_label.setText("Key saved" if self.get_api_key() else "Not configured")
         if hasattr(self, "api_usage_label"):
             self.api_usage_label.setText(
-                f"Local fixture requests today (UTC): {self.store.fixture_requests_today()} "
+                f"Local API requests today (UTC): {api_requests_today()} "
                 "• This is an app counter, not the provider's remaining quota."
             )
 
@@ -697,7 +681,6 @@ class MainWindow(QMainWindow):
         self.load_fixtures_button.setEnabled(False)
         self.refresh_fixtures_button.setEnabled(False)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self.store.record_fixture_request()
         self.update_api_status()
         try:
             fixtures = fetch_fixtures(api_key=key, date=date)
