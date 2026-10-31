@@ -11,10 +11,10 @@ from api_usage import api_requests_today
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFormLayout,
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QPushButton, QScrollArea, QSpinBox, QTabWidget, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget
+    QApplication, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog,
+    QFormLayout, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTabWidget,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 )
 from api_football import (
     ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures,
@@ -34,6 +34,7 @@ from settlement import settle_markets
 from performance_metrics import summarize_performance
 from fixture_view import filter_fixtures, competition_options, fixture_status_group
 from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
+from csv_historical_importer import HistoricalCsvImporter
 from player_intelligence import PlayerIntelligenceDatabase
 
 APP_NAME = "Football Prediction Platform"
@@ -310,6 +311,7 @@ class MainWindow(QMainWindow):
         self.resize(1100, 740)
         self.store = Store()
         self.historical_db = HistoricalDatabase(self.store.path)
+        self.csv_importer = HistoricalCsvImporter(self.store.path)
         self.player_intelligence_db = PlayerIntelligenceDatabase(self.store.path)
         self.setStyleSheet(APP_STYLESHEET)
         root = QWidget(); outer = QVBoxLayout(root)
@@ -452,6 +454,9 @@ class MainWindow(QMainWindow):
         self.import_all_button = QPushButton("Import All Major Competitions")
         self.import_all_button.clicked.connect(self.sync_all_major_competitions)
         actions.addWidget(self.import_all_button)
+        self.import_csv_button = QPushButton("Import Historical CSV")
+        self.import_csv_button.clicked.connect(self.import_historical_csv)
+        actions.addWidget(self.import_csv_button)
         refresh = QPushButton("Refresh Summary")
         refresh.clicked.connect(self.refresh_data_library)
         actions.addWidget(refresh)
@@ -494,6 +499,49 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 self.library_table.setItem(row_index, column, QTableWidgetItem(str(value)))
+
+    def import_historical_csv(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select historical football CSV", "", "CSV files (*.csv);;All files (*)"
+        )
+        if not path:
+            return
+        season, accepted = QInputDialog.getInt(
+            self, "Dataset season",
+            "Which season does this CSV contain? Enter the season start year (e.g. 2024 for 2024/25).",
+            self.library_season_from.value(), 2000, 2035
+        )
+        if not accepted:
+            return
+        competition = next(
+            item for item in MAJOR_COMPETITIONS
+            if item["league_id"] == self.library_competition.currentData()
+        )
+        self.import_csv_button.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = self.csv_importer.import_file(path, competition, season)
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            QMessageBox.warning(self, "CSV import", str(exc))
+            self.library_status.setText(f"CSV import failed: {exc}")
+            return
+        except Exception as exc:
+            QMessageBox.warning(self, "CSV import", f"Unexpected import error: {exc}")
+            self.library_status.setText("CSV import failed.")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.import_csv_button.setEnabled(True)
+        self.refresh_data_library()
+        message = (
+            f"CSV import complete: {result['stored']:,} matches stored for "
+            f"{result['competition']} {result['season']}. Skipped rows: {result['skipped']}. "
+            "Re-importing matching fixtures updates them without creating duplicates."
+        )
+        if result["errors"]:
+            message += "\n" + "\n".join(result["errors"][:5])
+        self.library_status.setText(message)
+        QMessageBox.information(self, "CSV import complete", message)
 
     def sync_selected_competition(self):
         selected_id = self.library_competition.currentData()

@@ -70,3 +70,15 @@ The app is unsigned, so Windows may display a SmartScreen warning. Only run the 
 - A player missing from a lineup is not assumed injured. Questionable reports are not counted as confirmed absences.
 - Player and team IDs currently use API-Football IDs. Cross-provider identity mapping will be added with the FootyStats integration.
 - API-Football's injury endpoint has historical availability from April 2021, but actual coverage varies by league and season. The app only records data returned by the user's plan and provider coverage.
+
+
+## Provider-independent historical CSV imports
+
+- Open Data Library and select **Import Historical CSV** to load a local .csv dataset without a second paid API subscription.
+- Select the competition already chosen in Data Library and enter the season start year represented by the file.
+- Recognizes common Football-Data.co.uk headers (Date, HomeTeam, AwayTeam, FTHG, FTAG, HC, AC, HY, AY, HR, AR, B365H/D/A) and generic equivalents. Comma, semicolon and tab-delimited files are supported.
+- Goals, corners, cards, shots, shots on target, possession and 1X2 odds are retained whenever present. Missing fields remain unavailable, never zero.
+- Imported matches use deterministic negative local IDs, separate from API-Football positive fixture IDs. Re-importing a matching date/team/competition/season updates the record instead of duplicating it.
+- Original file name, CSV provider marker, normalized match payload, file SHA-256 and an import-history record are stored locally.
+- Invalid rows are skipped with row-level explanations; files missing required date, team or full-time-goal columns are rejected with a format hint.
+- CSV team identities are source-local and are not silently equated with API-Football IDs. Cross-provider team/fixture mapping is a later reconciliation step before CSV rows are mixed into provider-ID-based model queries.
