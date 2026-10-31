@@ -1,5 +1,6 @@
 import sqlite3
 import tempfile
+from contextlib import closing
 import unittest
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from historical_reconciliation import HistoricalReconciliation, normalize_team_n
 
 
 def make_db(path):
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         db.execute("""
             CREATE TABLE historical_matches (
                 fixture_id INTEGER PRIMARY KEY, league_id INTEGER, season INTEGER,
@@ -85,7 +86,7 @@ class HistoricalReconciliationTests(unittest.TestCase):
 
     def test_reconciliation_does_not_rewrite_source_match_ids(self):
         self.service.approve_team_link(-1, 39, 33)
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             source_id = db.execute(
                 "SELECT home_team_id FROM historical_matches WHERE fixture_id=-101"
             ).fetchone()[0]
