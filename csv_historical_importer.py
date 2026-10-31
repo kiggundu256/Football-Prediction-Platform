@@ -170,6 +170,16 @@ class HistoricalCsvImporter:
                 )
             """)
 
+    def history(self, limit=100):
+        with self.sqlite3.connect(self.path) as db:
+            db.row_factory = self.sqlite3.Row
+            rows = db.execute("""
+                SELECT file_name,competition,season,imported_rows,skipped_rows,
+                       imported_at_utc,file_sha256
+                FROM historical_csv_imports ORDER BY id DESC LIMIT ?
+            """, (int(limit),)).fetchall()
+        return [dict(row) for row in rows]
+
     def import_file(self, path, competition, season):
         from datetime import datetime, timezone
         matches, summary = parse_csv_matches(path, competition, season)

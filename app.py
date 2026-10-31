@@ -475,7 +475,19 @@ class MainWindow(QMainWindow):
         self.library_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.library_table.horizontalHeader().setStretchLastSection(True)
         enable_table_copy(self.library_table)
-        box.addWidget(self.library_table, 1)
+        box.addWidget(self.library_table)
+        csv_heading = QLabel("CSV IMPORT HISTORY")
+        csv_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
+        box.addWidget(csv_heading)
+        self.csv_import_history_table = QTableWidget(0, 6)
+        self.csv_import_history_table.setHorizontalHeaderLabels([
+            "File", "Competition", "Season", "Imported", "Skipped", "Imported (UTC)"
+        ])
+        self.csv_import_history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.csv_import_history_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.csv_import_history_table.horizontalHeader().setStretchLastSection(True)
+        enable_table_copy(self.csv_import_history_table)
+        box.addWidget(self.csv_import_history_table)
         self.refresh_data_library()
         return page
 
@@ -499,6 +511,19 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 self.library_table.setItem(row_index, column, QTableWidgetItem(str(value)))
+        if hasattr(self, "csv_import_history_table"):
+            imports = self.csv_importer.history()
+            self.csv_import_history_table.setRowCount(len(imports))
+            for row_index, record in enumerate(imports):
+                values = [
+                    record["file_name"], record["competition"], record["season"],
+                    record["imported_rows"], record["skipped_rows"],
+                    (record["imported_at_utc"] or "").replace("T", " ")[:19],
+                ]
+                for column, value in enumerate(values):
+                    self.csv_import_history_table.setItem(
+                        row_index, column, QTableWidgetItem(str(value))
+                    )
 
     def import_historical_csv(self):
         path, _ = QFileDialog.getOpenFileName(
