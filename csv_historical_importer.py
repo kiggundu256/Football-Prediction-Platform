@@ -201,7 +201,7 @@ class HistoricalCsvImporter:
             raise ValueError("No valid matches were found. " + detail)
         digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
         now = datetime.now(timezone.utc).isoformat()
-        with self.sqlite3.connect(self.path) as db:
+        with self.connect() as db:
             db.execute("""
                 INSERT INTO historical_competitions(league_id,name,country)
                 VALUES(?,?,?) ON CONFLICT(league_id) DO UPDATE SET
