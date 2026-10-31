@@ -35,6 +35,7 @@ from performance_metrics import summarize_performance
 from fixture_view import filter_fixtures, competition_options, fixture_status_group
 from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
 from csv_historical_importer import HistoricalCsvImporter
+from historical_reconciliation import HistoricalReconciliation
 from player_intelligence import PlayerIntelligenceDatabase
 
 APP_NAME = "Football Prediction Platform"
@@ -312,6 +313,7 @@ class MainWindow(QMainWindow):
         self.store = Store()
         self.historical_db = HistoricalDatabase(self.store.path)
         self.csv_importer = HistoricalCsvImporter(self.store.path)
+        self.reconciliation_db = HistoricalReconciliation(self.store.path)
         self.player_intelligence_db = PlayerIntelligenceDatabase(self.store.path)
         self.setStyleSheet(APP_STYLESHEET)
         root = QWidget(); outer = QVBoxLayout(root)
@@ -332,6 +334,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.history_page(), "Prediction History")
         self.tabs.addTab(self.performance(), "Performance Lab")
         self.tabs.addTab(self.data_library_page(), "Data Library")
+        self.tabs.addTab(self.reconciliation_page(), "Reconciliation")
         self.tabs.addTab(self.player_intelligence_page(), "Player Intelligence")
         outer.addWidget(self.tabs); self.setCentralWidget(root)
         self.refresh_history()
@@ -339,6 +342,179 @@ class MainWindow(QMainWindow):
         self.restore_cached_fixtures()
         enable_text_selection(self)
 
+
+    def reconciliation_page(self):
+        page = QWidget()
+        box = QVBoxLayout(page)
+        heading = QLabel("HISTORICAL DATA RECONCILIATION")
+        heading.setStyleSheet("font-size:19px;font-weight:800;color:#EAF2FF")
+        box.addWidget(heading)
+        intro = QLabel(
+            "Match CSV team identities to API-Football teams, then link corresponding fixtures. "
+            "Suggestions are ranked by name similarity, but every link requires your approval. "
+            "Original CSV IDs and historical rows remain unchanged."
+        )
+        intro.setWordWrap(True)
+        box.addWidget(intro)
+        self.reconciliation_summary = QLabel("")
+        self.reconciliation_summary.setWordWrap(True)
+        box.addWidget(self.reconciliation_summary)
+
+        team_heading = QLabel("1. REVIEW TEAM IDENTITIES")
+        team_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
+        box.addWidget(team_heading)
+        self.reconciliation_team_table = QTableWidget(0, 4)
+        self.reconciliation_team_table.setHorizontalHeaderLabels(
+            ["Competition ID", "CSV team name", "Suggested API-Football team", "Similarity"]
+        )
+        self.reconciliation_team_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.reconciliation_team_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.reconciliation_team_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.reconciliation_team_table.horizontalHeader().setStretchLastSection(True)
+        box.addWidget(self.reconciliation_team_table)
+        team_actions = QHBoxLayout()
+        self.approve_team_link_button = QPushButton("Approve Selected Team Match")
+        self.approve_team_link_button.clicked.connect(self.approve_selected_team_identity)
+        team_actions.addWidget(self.approve_team_link_button)
+        team_actions.addStretch()
+        box.addLayout(team_actions)
+
+        fixture_heading = QLabel("2. REVIEW FIXTURE IDENTITIES")
+        fixture_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
+        box.addWidget(fixture_heading)
+        fixture_note = QLabel(
+            "Fixture suggestions appear after both home and away team identities have been approved. "
+            "Matching scores and nearby dates are highlighted for review."
+        )
+        fixture_note.setWordWrap(True)
+        box.addWidget(fixture_note)
+        self.reconciliation_fixture_table = QTableWidget(0, 6)
+        self.reconciliation_fixture_table.setHorizontalHeaderLabels(
+            ["CSV fixture", "API fixture", "CSV date", "API date", "Match", "Score check"]
+        )
+        self.reconciliation_fixture_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.reconciliation_fixture_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.reconciliation_fixture_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.reconciliation_fixture_table.horizontalHeader().setStretchLastSection(True)
+        box.addWidget(self.reconciliation_fixture_table)
+        fixture_actions = QHBoxLayout()
+        self.approve_fixture_link_button = QPushButton("Approve Selected Fixture Match")
+        self.approve_fixture_link_button.clicked.connect(self.approve_selected_fixture_identity)
+        fixture_actions.addWidget(self.approve_fixture_link_button)
+        refresh = QPushButton("Refresh Reconciliation")
+        refresh.clicked.connect(self.refresh_reconciliation)
+        fixture_actions.addWidget(refresh)
+        fixture_actions.addStretch()
+        box.addLayout(fixture_actions)
+        self.refresh_reconciliation()
+        return page
+
+    def refresh_reconciliation(self):
+        if not hasattr(self, "reconciliation_team_table"):
+            return
+        summary = self.reconciliation_db.summary()
+        self.reconciliation_summary.setText(
+            f"CSV teams: {summary['csv_teams']}  •  API-Football teams: {summary['provider_teams']}  •  "
+            f"Approved team links: {summary['linked_teams']}  •  CSV fixtures: {summary['csv_fixtures']}  •  "
+            f"Approved fixture links: {summary['linked_fixtures']}"
+        )
+        teams = self.reconciliation_db.team_candidates()
+        table = self.reconciliation_team_table
+        table.setRowCount(len(teams))
+        for row_index, record in enumerate(teams):
+            candidates = record["candidates"]
+            suggested = candidates[0] if candidates else None
+            values = [
+                record["competition_id"],
+                record["source_team_name"],
+                suggested["team_name"] if suggested else "No candidate found",
+                f"{suggested['score']:.0%}" if suggested else "—",
+            ]
+            for column, value in enumerate(values):
+                table.setItem(row_index, column, QTableWidgetItem(str(value)))
+            table.item(row_index, 0).setData(Qt.ItemDataRole.UserRole, record)
+            if suggested and suggested["exact"]:
+                table.item(row_index, 3).setToolTip("Exact normalized name match; still requires approval.")
+            elif suggested:
+                table.item(row_index, 3).setToolTip(
+                    "Name similarity is a suggestion only. Confirm the club before approving."
+                )
+        table.resizeColumnsToContents()
+
+        fixtures = self.reconciliation_db.fixture_candidates()
+        fixture_table = self.reconciliation_fixture_table
+        fixture_table.setRowCount(len(fixtures))
+        for row_index, record in enumerate(fixtures):
+            values = [
+                record["csv_fixture_id"], record["api_fixture_id"],
+                record["csv_date"], record["api_date"],
+                f"{record['csv_home']} vs {record['csv_away']}",
+                "Scores agree" if record["score_match"] else "Review scores",
+            ]
+            for column, value in enumerate(values):
+                fixture_table.setItem(row_index, column, QTableWidgetItem(str(value)))
+            fixture_table.item(row_index, 0).setData(Qt.ItemDataRole.UserRole, record)
+        fixture_table.resizeColumnsToContents()
+
+    def approve_selected_team_identity(self):
+        row = self.reconciliation_team_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Select a team", "Select a CSV team row first.")
+            return
+        record = self.reconciliation_team_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        candidates = record["candidates"]
+        if not candidates:
+            QMessageBox.warning(self, "No candidate", "No API-Football team candidate was found for this CSV team.")
+            return
+        options = [f"{item['team_name']} (ID {item['team_id']}, {item['score']:.0%})"
+                   for item in candidates]
+        choice, accepted = QInputDialog.getItem(
+            self, "Confirm team identity",
+            f"Which API-Football team is '{record['source_team_name']}'?",
+            options, 0, False
+        )
+        if not accepted:
+            return
+        target = candidates[options.index(choice)]
+        try:
+            self.reconciliation_db.approve_team_link(
+                record["source_team_id"], record["competition_id"], target["team_id"]
+            )
+        except (ValueError, sqlite3.Error) as exc:
+            QMessageBox.warning(self, "Team mapping not saved", str(exc))
+            return
+        self.refresh_reconciliation()
+        QMessageBox.information(
+            self, "Team identity approved",
+            f"{record['source_team_name']} is now linked to {target['team_name']}."
+        )
+
+    def approve_selected_fixture_identity(self):
+        row = self.reconciliation_fixture_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Select a fixture", "Select a CSV/API fixture pair first.")
+            return
+        record = self.reconciliation_fixture_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        answer = QMessageBox.question(
+            self, "Confirm fixture identity",
+            f"Link CSV fixture {record['csv_fixture_id']} ({record['csv_home']} vs {record['csv_away']}) "
+            f"to API-Football fixture {record['api_fixture_id']}?\n\n"
+            f"Dates: {record['csv_date']} / {record['api_date']}\n"
+            f"Scores agree: {'Yes' if record['score_match'] else 'No'}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.reconciliation_db.approve_fixture_link(
+                record["csv_fixture_id"], record["api_fixture_id"], record["competition_id"]
+            )
+        except (ValueError, sqlite3.Error) as exc:
+            QMessageBox.warning(self, "Fixture mapping not saved", str(exc))
+            return
+        self.refresh_reconciliation()
+        QMessageBox.information(self, "Fixture identity approved", "The fixture link has been saved.")
 
     def player_intelligence_page(self):
         page = QWidget()
