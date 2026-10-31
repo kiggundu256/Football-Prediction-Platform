@@ -1007,6 +1007,7 @@ class MainWindow(QMainWindow):
             return
         finally:
             QApplication.restoreOverrideCursor()
+            self.update_api_status()
 
         def matches_used(fixtures, team_id):
             used = []
@@ -1793,6 +1794,7 @@ class MainWindow(QMainWindow):
             return
         finally:
             QApplication.restoreOverrideCursor()
+            self.update_api_status()
         self.refresh_history()
         self.settlement_message.setText(
             f"Checked {checked} linked predictions; settled {settled}. "
