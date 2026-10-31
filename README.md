@@ -20,6 +20,8 @@ A local-first Windows football analytics and prediction workspace built with Pyt
 - 1X2, over/under goals, BTTS and likely scorelines.
 - Corner predictions for match totals and each team's corners when sufficient historical corner statistics are available.
 - Match intelligence: injuries/suspensions, announced lineups, referee, venue weather and historical corner context.
+- Player Intelligence workspace with timestamped API-Football injury/lineup snapshots, completed-match player appearances and performance comparisons.
+- Player availability comparisons distinguish confirmed Missing Fixture reports from unknown absences; missing injury feeds are never treated as proof of fitness.
 - Prediction settlement and performance tracking by market, day and model version.
 - Probability-quality metrics: multiclass Brier score and log loss.
 - SQLite migrations preserve existing prediction history and the historical archive shares the same app-private database file.
@@ -57,3 +59,14 @@ The app is unsigned, so Windows may display a SmartScreen warning. Only run the 
 - Unit tests run before the Windows executable is built.
 - API calls are initiated only by user actions; cached data is reused according to its freshness window.
 - Open-Meteo supplies weather when venue coordinates are available.
+
+
+## Player availability and performance intelligence
+
+- Every time match intelligence is loaded, the app stores the injury/suspension response and announced lineup as timestamped snapshots in the same local SQLite database.
+- For completed fixtures, the app also requests and stores individual player match statistics (appearances, minutes and ratings where supplied).
+- The Player Intelligence tab compares a team's results when a selected player appeared, when a fixture-specific report marked them as a **Missing Fixture**, and when the reason for absence is unknown.
+- Historical snapshots are retained when provider data changes. Identical payloads are deduplicated; normalized player records are safely upserted.
+- A player missing from a lineup is not assumed injured. Questionable reports are not counted as confirmed absences.
+- Player and team IDs currently use API-Football IDs. Cross-provider identity mapping will be added with the FootyStats integration.
+- API-Football's injury endpoint has historical availability from April 2021, but actual coverage varies by league and season. The app only records data returned by the user's plan and provider coverage.

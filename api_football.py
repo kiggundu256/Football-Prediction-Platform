@@ -362,3 +362,48 @@ def fetch_venue_details(venue_id, api_key=None, timeout=20):
         raise ApiFootballError(_format_provider_errors(errors))
     venues = payload.get("response", [])
     return venues[0] if venues else None
+
+
+def fetch_team_injuries(team_id, season, api_key=None, timeout=20):
+    """Fetch the provider's season-scoped injury/suspension reports for a team."""
+    return _fetch_context("injuries", {"team": int(team_id), "season": int(season)}, api_key, timeout)
+
+
+def fetch_player_sidelined(player_id, api_key=None, timeout=20):
+    """Fetch historical sidelined periods for a player."""
+    return _fetch_context("sidelined", {"player": int(player_id)}, api_key, timeout)
+
+
+def fetch_fixture_player_statistics(fixture_id, api_key=None, timeout=20):
+    """Fetch individual player appearances and match statistics for a fixture."""
+    return _fetch_context("fixtures/players", {"fixture": int(fixture_id)}, api_key, timeout)
+
+
+def _fetch_context(endpoint, params, api_key=None, timeout=20):
+    """Shared provider reader for player and team intelligence endpoints."""
+    key = api_key or os.environ.get("API_FOOTBALL_KEY")
+    if not key:
+        raise ApiFootballError("API key is missing. Enter it in the app settings.")
+    try:
+        response = _tracked_get(
+            f"{BASE_URL}/{endpoint}",
+            headers={"x-apisports-key": key},
+            params=params,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise ApiFootballError(f"Could not reach API-Football: {exc.__class__.__name__}") from None
+    if response.status_code in (401, 403):
+        raise ApiFootballError("API-Football rejected the key or plan access. Check the dashboard and subscription.")
+    if response.status_code == 429:
+        raise ApiFootballError("API-Football request limit reached. Try again later.")
+    if not response.ok:
+        raise ApiFootballError(f"API-Football returned HTTP {response.status_code}.")
+    try:
+        payload = response.json()
+    except ValueError:
+        raise ApiFootballError("API-Football returned an unreadable response.") from None
+    errors = payload.get("errors")
+    if errors:
+        raise ApiFootballError(_format_provider_errors(errors))
+    return payload.get("response", [])

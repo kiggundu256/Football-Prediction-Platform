@@ -20,7 +20,7 @@ from api_football import (
     ApiFootballError, fetch_fixtures, fetch_recent_team_fixtures,
     fetch_head_to_head_fixtures, fetch_fixture_by_id,
     fetch_fixture_corner_statistics, fetch_fixture_injuries,
-    fetch_fixture_lineups, fetch_venue_details,
+    fetch_fixture_lineups, fetch_fixture_player_statistics, fetch_venue_details,
 )
 from corners_engine import predict_corner_markets
 from model_ensemble import predict_ensemble
@@ -34,6 +34,7 @@ from settlement import settle_markets
 from performance_metrics import summarize_performance
 from fixture_view import filter_fixtures, competition_options, fixture_status_group
 from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
+from player_intelligence import PlayerIntelligenceDatabase
 
 APP_NAME = "Football Prediction Platform"
 KEYRING_SERVICE = "FootballPredictionPlatform"
@@ -309,6 +310,7 @@ class MainWindow(QMainWindow):
         self.resize(1100, 740)
         self.store = Store()
         self.historical_db = HistoricalDatabase(self.store.path)
+        self.player_intelligence_db = PlayerIntelligenceDatabase(self.store.path)
         self.setStyleSheet(APP_STYLESHEET)
         root = QWidget(); outer = QVBoxLayout(root)
         head = QHBoxLayout()
@@ -328,11 +330,89 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.history_page(), "Prediction History")
         self.tabs.addTab(self.performance(), "Performance Lab")
         self.tabs.addTab(self.data_library_page(), "Data Library")
+        self.tabs.addTab(self.player_intelligence_page(), "Player Intelligence")
         outer.addWidget(self.tabs); self.setCentralWidget(root)
         self.refresh_history()
         self.update_api_status()
         self.restore_cached_fixtures()
         enable_text_selection(self)
+
+
+    def player_intelligence_page(self):
+        page = QWidget()
+        box = QVBoxLayout(page)
+        heading = QLabel("PLAYER AVAILABILITY & TEAM PERFORMANCE")
+        heading.setStyleSheet("font-size:19px;font-weight:800;color:#EAF2FF")
+        box.addWidget(heading)
+        intro = QLabel(
+            "Compare a team's completed results when a player appeared, when a confirmed injury "
+            "report ruled them out, and when their absence reason is unknown. Unknown absences are "
+            "never treated as injuries. Records accumulate as match intelligence is captured."
+        )
+        intro.setWordWrap(True)
+        box.addWidget(intro)
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Team API ID:"))
+        self.intel_team_id = QSpinBox()
+        self.intel_team_id.setRange(1, 999999)
+        controls.addWidget(self.intel_team_id)
+        controls.addWidget(QLabel("Player API ID:"))
+        self.intel_player_id = QSpinBox()
+        self.intel_player_id.setRange(1, 99999999)
+        controls.addWidget(self.intel_player_id)
+        compare = QPushButton("Compare performance")
+        compare.clicked.connect(self.refresh_player_comparison)
+        controls.addWidget(compare)
+        box.addLayout(controls)
+        self.player_intel_status = QLabel(
+            "Enter the API-Football team and player IDs. Historical coverage depends on the "
+            "matches, injury reports and player statistics stored in your local database."
+        )
+        self.player_intel_status.setWordWrap(True)
+        box.addWidget(self.player_intel_status)
+        self.player_intel_table = QTableWidget(0, 9)
+        self.player_intel_table.setHorizontalHeaderLabels([
+            "Availability group", "Matches", "Wins", "Win rate", "Points / match",
+            "Goals for", "Goals against", "Corners for", "Player rating"
+        ])
+        self.player_intel_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.player_intel_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.player_intel_table.horizontalHeader().setStretchLastSection(True)
+        enable_table_copy(self.player_intel_table)
+        box.addWidget(self.player_intel_table, 1)
+        return page
+
+    def refresh_player_comparison(self):
+        team_id = self.intel_team_id.value()
+        player_id = self.intel_player_id.value()
+        result = self.player_intelligence_db.compare_team_with_player(team_id, player_id)
+        labels = [
+            ("Player appeared", "player_played"),
+            ("Confirmed injury absence", "confirmed_injured_absence"),
+            ("Absence reason unknown", "absence_unknown"),
+        ]
+        self.player_intel_table.setRowCount(len(labels))
+        for row, (label, key) in enumerate(labels):
+            stats = result[key]
+            def fmt(value, suffix=""):
+                return f"{value:.2f}{suffix}" if value is not None else "—"
+            values = [
+                label, stats["matches"], stats["wins"], fmt(stats["win_rate"]) if stats["win_rate"] is not None else "—",
+                fmt(stats["points_per_match"]), fmt(stats["average_goals_for"]),
+                fmt(stats["average_goals_against"]), fmt(stats["average_corners_for"]),
+                fmt(stats["average_player_rating"]),
+            ]
+            if stats["win_rate"] is not None:
+                values[3] = f"{stats['win_rate']:.1%}"
+            for column, value in enumerate(values):
+                self.player_intel_table.setItem(row, column, QTableWidgetItem(str(value)))
+        snapshots = self.player_intelligence_db.player_appearances(player_id, limit=500)
+        injuries = self.player_intelligence_db.player_availability_history(player_id)
+        self.player_intel_status.setText(
+            f"Player records: {len(snapshots)} match appearances • {len(injuries)} availability reports. "
+            "A player absent from a lineup is not assumed injured unless a matching injury/suspension "
+            "report exists for that fixture. Small samples should be interpreted cautiously."
+        )
 
     def data_library_page(self):
         page = QWidget()
@@ -1036,6 +1116,26 @@ class MainWindow(QMainWindow):
                 "Lineups", f"lineups:{fixture_id}",
                 lambda: fetch_fixture_lineups(fixture_id, api_key=key), 10 * 60
             )
+
+            if injuries is not None:
+                self.player_intelligence_db.save_snapshot(
+                    "injuries", injuries, fixture_id=fixture_id
+                )
+            if lineups is not None:
+                self.player_intelligence_db.save_snapshot(
+                    "lineups", lineups, fixture_id=fixture_id
+                )
+            fixture_status = ((fixture.get("status") or {}).get("short") or "").upper()
+            if fixture_status in {"FT", "AET", "PEN"}:
+                player_stats = optional_data(
+                    "Player statistics", f"player_stats:{fixture_id}",
+                    lambda: fetch_fixture_player_statistics(fixture_id, api_key=key),
+                    30 * 24 * 60 * 60,
+                )
+                if player_stats is not None:
+                    self.player_intelligence_db.save_snapshot(
+                        "player_statistics", player_stats, fixture_id=fixture_id
+                    )
 
             venue = fixture.get("venue") or {}
             venue_data = optional_data(
