@@ -1,5 +1,6 @@
 """CSV import support for provider-independent historical match archives."""
 import csv
+from contextlib import contextmanager
 import hashlib
 import json
 import re
@@ -159,7 +160,7 @@ class HistoricalCsvImporter:
         import sqlite3
         self.sqlite3 = sqlite3
         self.path = str(database_path)
-        with self.sqlite3.connect(self.path) as db:
+        with self.connect() as db:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS historical_csv_imports (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, file_name TEXT NOT NULL,
@@ -170,8 +171,20 @@ class HistoricalCsvImporter:
                 )
             """)
 
+    @contextmanager
+    def connect(self):
+        db = self.sqlite3.connect(self.path)
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     def history(self, limit=100):
-        with self.sqlite3.connect(self.path) as db:
+        with self.connect() as db:
             db.row_factory = self.sqlite3.Row
             rows = db.execute("""
                 SELECT file_name,competition,season,imported_rows,skipped_rows,

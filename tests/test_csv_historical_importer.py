@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 import json
 import sqlite3
+from contextlib import closing
 
 from csv_historical_importer import HistoricalCsvImporter, parse_csv_matches
 from historical_database import HistoricalDatabase
@@ -45,7 +46,7 @@ class HistoricalCsvImporterTests(unittest.TestCase):
         importer = HistoricalCsvImporter(self.database)
         self.assertEqual(importer.import_file(path, COMPETITION, 2025)["stored"], 1)
         self.assertEqual(importer.import_file(path, COMPETITION, 2025)["stored"], 1)
-        with sqlite3.connect(self.database) as db:
+        with closing(sqlite3.connect(self.database)) as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM historical_matches").fetchone()[0], 1)
             fixture_id, stats, payload = db.execute(
                 "SELECT fixture_id,stats_json,payload_json FROM historical_matches"
