@@ -1,6 +1,7 @@
 import sqlite3
-
-import pytest
+import tempfile
+import unittest
+from pathlib import Path
 
 from historical_reconciliation import HistoricalReconciliation, normalize_team_name
 
@@ -33,76 +34,63 @@ def make_db(path):
             """, (fixture_id, league_id, day, home_id, home, away_id, away, hg, ag))
 
 
-def test_normalize_team_name_handles_punctuation_suffix_and_diacritics():
-    assert normalize_team_name("Brighton & Hove Albion FC") == "brighton and hove albion"
-    assert normalize_team_name("Atlético Madrid CF") == "atletico madrid"
+class HistoricalReconciliationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.path = Path(self.temp.name) / "history.db"
+        make_db(self.path)
+        self.service = HistoricalReconciliation(self.path)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_normalize_team_name_handles_punctuation_suffix_and_diacritics(self):
+        self.assertEqual(normalize_team_name("Brighton & Hove Albion FC"),
+                         "brighton and hove albion")
+        self.assertEqual(normalize_team_name("Atlético Madrid CF"), "atletico madrid")
+
+    def test_team_candidates_rank_normalized_names(self):
+        candidates = self.service.team_candidates()
+        man_utd = next(item for item in candidates if item["source_team_name"] == "Man United")
+        brighton = next(item for item in candidates
+                        if item["source_team_name"] == "Brighton & Hove Albion")
+        self.assertEqual(man_utd["candidates"][0]["team_id"], 33)
+        self.assertEqual(brighton["candidates"][0]["team_id"], 51)
+        self.assertGreaterEqual(man_utd["best_score"], 0.55)
+
+    def test_approved_team_links_are_persisted(self):
+        link = self.service.approve_team_link(-1, 39, 33)
+        self.assertEqual(link["target_team_name"], "Manchester United FC")
+        self.assertTrue(all(item["source_team_id"] != -1
+                            for item in self.service.team_candidates()))
+
+    def test_fixture_candidates_require_both_team_links_and_rank_score_matches(self):
+        self.service.approve_team_link(-1, 39, 33)
+        self.service.approve_team_link(-2, 39, 36)
+        self.service.approve_team_link(-3, 39, 51)
+        candidates = self.service.fixture_candidates()
+        self.assertEqual(len(candidates), 2)
+        self.assertEqual(candidates[0]["csv_fixture_id"], -101)
+        self.assertEqual(candidates[0]["api_fixture_id"], 9001)
+        self.assertTrue(candidates[0]["score_match"])
+
+    def test_fixture_link_requires_approved_home_and_away_team_links(self):
+        with self.assertRaisesRegex(ValueError, "team identities"):
+            self.service.approve_fixture_link(-101, 9001, 39)
+        self.service.approve_team_link(-1, 39, 33)
+        self.service.approve_team_link(-2, 39, 36)
+        result = self.service.approve_fixture_link(-101, 9001, 39)
+        self.assertEqual(result, {"source_fixture_id": -101, "target_fixture_id": 9001})
+        self.assertEqual(self.service.summary()["linked_fixtures"], 1)
+
+    def test_reconciliation_does_not_rewrite_source_match_ids(self):
+        self.service.approve_team_link(-1, 39, 33)
+        with sqlite3.connect(self.path) as db:
+            source_id = db.execute(
+                "SELECT home_team_id FROM historical_matches WHERE fixture_id=-101"
+            ).fetchone()[0]
+        self.assertEqual(source_id, -1)
 
 
-def test_team_candidates_rank_exact_normalized_names(tmp_path):
-    path = tmp_path / "history.db"
-    make_db(path)
-    service = HistoricalReconciliation(path)
-
-    candidates = service.team_candidates()
-
-    man_utd = next(item for item in candidates if item["source_team_name"] == "Man United")
-    brighton = next(item for item in candidates if item["source_team_name"] == "Brighton & Hove Albion")
-    assert man_utd["candidates"][0]["team_id"] == 33
-    assert brighton["candidates"][0]["team_id"] == 51
-    assert man_utd["best_score"] >= 0.55
-
-
-def test_approved_team_links_are_persisted_and_scoped_by_competition(tmp_path):
-    path = tmp_path / "history.db"
-    make_db(path)
-    service = HistoricalReconciliation(path)
-
-    link = service.approve_team_link(-1, 39, 33)
-
-    assert link["target_team_name"] == "Manchester United FC"
-    assert all(item["source_team_id"] != -1 for item in service.team_candidates())
-
-
-def test_fixture_candidates_require_both_team_links_and_rank_score_matches(tmp_path):
-    path = tmp_path / "history.db"
-    make_db(path)
-    service = HistoricalReconciliation(path)
-    service.approve_team_link(-1, 39, 33)
-    service.approve_team_link(-2, 39, 36)
-    service.approve_team_link(-3, 39, 51)
-
-    candidates = service.fixture_candidates()
-
-    assert len(candidates) == 2
-    assert candidates[0]["csv_fixture_id"] == -101
-    assert candidates[0]["api_fixture_id"] == 9001
-    assert candidates[0]["score_match"] is True
-
-
-def test_fixture_link_requires_approved_home_and_away_team_links(tmp_path):
-    path = tmp_path / "history.db"
-    make_db(path)
-    service = HistoricalReconciliation(path)
-
-    with pytest.raises(ValueError, match="team identities"):
-        service.approve_fixture_link(-101, 9001, 39)
-
-    service.approve_team_link(-1, 39, 33)
-    service.approve_team_link(-2, 39, 36)
-    result = service.approve_fixture_link(-101, 9001, 39)
-
-    assert result == {"source_fixture_id": -101, "target_fixture_id": 9001}
-    assert service.summary()["linked_fixtures"] == 1
-
-
-def test_reconciliation_does_not_rewrite_source_match_ids(tmp_path):
-    path = tmp_path / "history.db"
-    make_db(path)
-    service = HistoricalReconciliation(path)
-    service.approve_team_link(-1, 39, 33)
-
-    with sqlite3.connect(path) as db:
-        source_id = db.execute(
-            "SELECT home_team_id FROM historical_matches WHERE fixture_id=-101"
-        ).fetchone()[0]
-    assert source_id == -1
+if __name__ == "__main__":
+    unittest.main()
