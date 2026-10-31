@@ -33,6 +33,7 @@ from ui_theme import APP_STYLESHEET
 from settlement import settle_markets
 from performance_metrics import summarize_performance
 from fixture_view import filter_fixtures, competition_options, fixture_status_group
+from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
 
 APP_NAME = "Football Prediction Platform"
 KEYRING_SERVICE = "FootballPredictionPlatform"
@@ -307,6 +308,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.resize(1100, 740)
         self.store = Store()
+        self.historical_db = HistoricalDatabase(self.store.path)
         self.setStyleSheet(APP_STYLESHEET)
         root = QWidget(); outer = QVBoxLayout(root)
         head = QHBoxLayout()
@@ -325,11 +327,182 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.analysis(), "Match Analysis")
         self.tabs.addTab(self.history_page(), "Prediction History")
         self.tabs.addTab(self.performance(), "Performance Lab")
+        self.tabs.addTab(self.data_library_page(), "Data Library")
         outer.addWidget(self.tabs); self.setCentralWidget(root)
         self.refresh_history()
         self.update_api_status()
         self.restore_cached_fixtures()
         enable_text_selection(self)
+
+    def data_library_page(self):
+        page = QWidget()
+        box = QVBoxLayout(page)
+        heading = QLabel("HISTORICAL FOOTBALL DATABASE")
+        heading.setStyleSheet("font-size:19px;font-weight:800;color:#EAF2FF")
+        box.addWidget(heading)
+        intro = QLabel(
+            "Import historical seasons manually. Match analysis checks this local archive first "
+            "and only requests missing history from API-Football. Missing statistics remain unavailable, not zero."
+        )
+        intro.setWordWrap(True)
+        box.addWidget(intro)
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Competition:"))
+        self.library_competition = QComboBox()
+        for competition in MAJOR_COMPETITIONS:
+            self.library_competition.addItem(
+                f"{competition['name']} ({competition['country']})", competition["league_id"]
+            )
+        controls.addWidget(self.library_competition, 2)
+        controls.addWidget(QLabel("From:"))
+        self.library_season_from = QSpinBox()
+        self.library_season_from.setRange(2000, 2035)
+        self.library_season_from.setValue(2021)
+        controls.addWidget(self.library_season_from)
+        controls.addWidget(QLabel("To:"))
+        self.library_season_to = QSpinBox()
+        self.library_season_to.setRange(2000, 2035)
+        self.library_season_to.setValue(2026)
+        controls.addWidget(self.library_season_to)
+        box.addLayout(controls)
+        actions = QHBoxLayout()
+        self.import_competition_button = QPushButton("Import Selected Competition")
+        self.import_competition_button.clicked.connect(self.sync_selected_competition)
+        actions.addWidget(self.import_competition_button)
+        self.import_all_button = QPushButton("Import All Major Competitions")
+        self.import_all_button.clicked.connect(self.sync_all_major_competitions)
+        actions.addWidget(self.import_all_button)
+        refresh = QPushButton("Refresh Summary")
+        refresh.clicked.connect(self.refresh_data_library)
+        actions.addWidget(refresh)
+        box.addLayout(actions)
+        self.library_summary = QLabel("")
+        self.library_summary.setWordWrap(True)
+        self.library_status = QLabel("Manual synchronization only. Each season import generally uses one API request.")
+        self.library_status.setWordWrap(True)
+        box.addWidget(self.library_summary)
+        box.addWidget(self.library_status)
+        self.library_table = QTableWidget(0, 7)
+        self.library_table.setHorizontalHeaderLabels([
+            "Competition", "Season", "Matches", "Completed", "Status", "Last sync (UTC)", "Details"
+        ])
+        self.library_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.library_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.library_table.horizontalHeader().setStretchLastSection(True)
+        enable_table_copy(self.library_table)
+        box.addWidget(self.library_table, 1)
+        self.refresh_data_library()
+        return page
+
+    def refresh_data_library(self):
+        if not hasattr(self, "library_table"):
+            return
+        stats = self.historical_db.stats()
+        self.library_summary.setText(
+            f"Stored matches: {stats['matches']:,}  •  Completed: {stats['completed']:,}  •  "
+            f"Competitions: {stats['competitions']}  •  Competition-seasons: {stats['competition_seasons']}  •  "
+            f"Matches with saved statistics: {stats['with_statistics']:,}"
+        )
+        rows = self.historical_db.season_summary()
+        self.library_table.setRowCount(len(rows))
+        for row_index, record in enumerate(rows):
+            values = [
+                f"{record['competition']} ({record['country'] or '—'})",
+                record["season"], record["match_count"], record["completed_count"],
+                record["status"], (record["synced_at_utc"] or "").replace("T", " ")[:19],
+                record["error"] or "—",
+            ]
+            for column, value in enumerate(values):
+                self.library_table.setItem(row_index, column, QTableWidgetItem(str(value)))
+
+    def sync_selected_competition(self):
+        selected_id = self.library_competition.currentData()
+        competition = next(item for item in MAJOR_COMPETITIONS if item["league_id"] == selected_id)
+        start, end = self.library_season_from.value(), self.library_season_to.value()
+        if start > end:
+            QMessageBox.warning(self, "Season range", "The starting season must not be later than the ending season.")
+            return
+        self.run_historical_sync([competition], range(start, end + 1))
+
+    def sync_all_major_competitions(self):
+        start, end = self.library_season_from.value(), self.library_season_to.value()
+        if start > end:
+            QMessageBox.warning(self, "Season range", "The starting season must not be later than the ending season.")
+            return
+        request_count = len(MAJOR_COMPETITIONS) * (end - start + 1)
+        answer = QMessageBox.question(
+            self, "Confirm historical import",
+            f"This may make up to {request_count} API requests. Your plan may reject some seasons. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.run_historical_sync(MAJOR_COMPETITIONS, range(start, end + 1))
+
+    def run_historical_sync(self, competitions, seasons):
+        key = self.get_api_key()
+        if not key:
+            QMessageBox.information(self, "API key needed", "Set your API-Football key before importing seasons.")
+            return
+        jobs = [(competition, season) for competition in competitions for season in seasons]
+        succeeded = failed = imported = 0
+        errors = []
+        self.import_competition_button.setEnabled(False)
+        self.import_all_button.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for index, (competition, season) in enumerate(jobs, start=1):
+                self.library_status.setText(
+                    f"Importing {competition['name']} — {season} ({index}/{len(jobs)}). "
+                    "Each successful season is saved immediately."
+                )
+                QApplication.processEvents()
+                try:
+                    fixtures = fetch_fixtures(
+                        api_key=key, league=competition["league_id"], season=season
+                    )
+                    saved = self.historical_db.upsert_fixtures(
+                        fixtures, league_id=competition["league_id"], season=season
+                    )
+                    completed = sum(
+                        1 for item in fixtures
+                        if ((item.get("fixture") or {}).get("status") or {}).get("short") in {"FT", "AET", "PEN"}
+                    )
+                    self.historical_db.record_sync(competition, season, saved, completed)
+                    succeeded += 1
+                    imported += saved
+                except ApiFootballError as exc:
+                    message = str(exc)
+                    self.historical_db.record_sync(
+                        competition, season, 0, 0, status="failed", error=message
+                    )
+                    failed += 1
+                    errors.append(f"{competition['name']} {season}: {message}")
+                    lowered = message.lower()
+                    if any(term in lowered for term in ("limit", "quota", "too many requests")):
+                        errors.append("Provider quota limit detected; remaining import jobs were stopped.")
+                        break
+                except Exception as exc:
+                    message = f"Unexpected import error: {exc.__class__.__name__}"
+                    self.historical_db.record_sync(
+                        competition, season, 0, 0, status="failed", error=message
+                    )
+                    failed += 1
+                    errors.append(f"{competition['name']} {season}: {message}")
+                self.refresh_data_library()
+                self.update_api_status()
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.import_competition_button.setEnabled(True)
+            self.import_all_button.setEnabled(True)
+        self.refresh_data_library()
+        self.update_api_status()
+        summary = (
+            f"Import finished. Successful competition-seasons: {succeeded}; failed: {failed}; "
+            f"match records added or updated: {imported:,}."
+        )
+        self.library_status.setText(summary + (("\n" + "\n".join(errors[:8])) if errors else ""))
+        QMessageBox.information(self, "Historical import", self.library_status.text())
 
     def dashboard(self):
         page = QWidget(); box = QVBoxLayout(page)
@@ -787,6 +960,7 @@ class MainWindow(QMainWindow):
             self.load_fixtures_button.setEnabled(True)
             self.refresh_fixtures_button.setEnabled(True)
         self.store.save_fixture_cache(date, fixtures)
+        self.historical_db.upsert_fixtures(fixtures)
         self.set_live_fixtures(fixtures, "provider")
         self.api_message.setText(
             f"Loaded {len(fixtures)} fixtures for {date} from API-Football and saved a local copy. "
@@ -882,13 +1056,19 @@ class MainWindow(QMainWindow):
 
             recent = {}
             for side, team_id in (("home", home_id), ("away", away_id)):
-                recent[side] = optional_data(
-                    f"{side.title()} history", f"team_recent:{team_id}:{match_date}:5",
-                    lambda tid=team_id: fetch_recent_team_fixtures(
-                        tid, api_key=key, last=5, before_date=match_date
-                    ),
-                    7 * 24 * 60 * 60,
-                ) or []
+                recent[side] = self.historical_db.team_recent_matches(
+                    team_id, match_date, limit=5
+                )
+                if not recent[side]:
+                    recent[side] = optional_data(
+                        f"{side.title()} history", f"team_recent:{team_id}:{match_date}:5",
+                        lambda tid=team_id: fetch_recent_team_fixtures(
+                            tid, api_key=key, last=5, before_date=match_date
+                        ),
+                        7 * 24 * 60 * 60,
+                    ) or []
+                    if recent[side]:
+                        self.historical_db.upsert_fixtures(recent[side])
 
             corner_data = {"home_for": [], "home_against": [], "away_for": [], "away_against": []}
             for side, team_id, fixtures in (
@@ -905,13 +1085,16 @@ class MainWindow(QMainWindow):
                     opponent_id = old_away.get("id") if old_home.get("id") == team_id else old_home.get("id")
                     if not old_id or not opponent_id:
                         continue
-                    stats = optional_data(
-                        "Historical corner statistics", f"corners:{old_id}",
-                        lambda fid=old_id: fetch_fixture_corner_statistics(fid, api_key=key),
-                        30 * 24 * 60 * 60,
-                    )
+                    stats = self.historical_db.corner_statistics(old_id)
+                    if stats is None:
+                        stats = optional_data(
+                            "Historical corner statistics", f"corners:{old_id}",
+                            lambda fid=old_id: fetch_fixture_corner_statistics(fid, api_key=key),
+                            30 * 24 * 60 * 60,
+                        )
                     if not isinstance(stats, dict):
                         continue
+                    self.historical_db.save_corner_statistics(old_id, stats)
                     own = stats.get(str(team_id), stats.get(team_id))
                     against = stats.get(str(opponent_id), stats.get(opponent_id))
                     if own is not None and against is not None:
@@ -972,35 +1155,55 @@ class MainWindow(QMainWindow):
         home_id, away_id = home.get("id"), away.get("id")
         home_name, away_name = home.get("name", "Home"), away.get("name", "Away")
         key = self.get_api_key()
-        if not key:
-            QMessageBox.information(self, "API key needed", "Set your API key before analyzing a match.")
-            return
-        self.api_message.setText(f"Fetching recent form for {home_name} and {away_name}…")
+        fixture_date = ((item.get("fixture") or {}).get("date") or "")[:10]
+        self.api_message.setText(
+            f"Checking local historical database for {home_name} and {away_name} first…"
+        )
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            fixture_date = ((item.get("fixture") or {}).get("date") or "")[:10]
-            home_recent = self.cached_provider_data(
-                f"team_recent:{home_id}:{fixture_date}:5",
-                lambda: fetch_recent_team_fixtures(home_id, api_key=key, last=5, before_date=fixture_date),
-                7 * 24 * 60 * 60,
+            home_recent = self.historical_db.team_recent_matches(home_id, fixture_date, limit=5)
+            away_recent = self.historical_db.team_recent_matches(away_id, fixture_date, limit=5)
+            if not home_recent or not away_recent:
+                if not key:
+                    raise ApiFootballError(
+                        "Local history is incomplete for one or both teams. Set an API key or import their seasons in Data Library."
+                    )
+                if not home_recent:
+                    home_recent = self.cached_provider_data(
+                        f"team_recent:{home_id}:{fixture_date}:5",
+                        lambda: fetch_recent_team_fixtures(
+                            home_id, api_key=key, last=5, before_date=fixture_date
+                        ),
+                        7 * 24 * 60 * 60,
+                    )
+                    self.historical_db.upsert_fixtures(home_recent)
+                if not away_recent:
+                    away_recent = self.cached_provider_data(
+                        f"team_recent:{away_id}:{fixture_date}:5",
+                        lambda: fetch_recent_team_fixtures(
+                            away_id, api_key=key, last=5, before_date=fixture_date
+                        ),
+                        7 * 24 * 60 * 60,
+                    )
+                    self.historical_db.upsert_fixtures(away_recent)
+            h2h_matches = self.historical_db.head_to_head_matches(
+                home_id, away_id, fixture_date, limit=10
             )
-            away_recent = self.cached_provider_data(
-                f"team_recent:{away_id}:{fixture_date}:5",
-                lambda: fetch_recent_team_fixtures(away_id, api_key=key, last=5, before_date=fixture_date),
-                7 * 24 * 60 * 60,
-            )
-            try:
-                h2h_matches = self.cached_provider_data(
-                    f"h2h:{home_id}:{away_id}:{fixture_date}:10",
-                    lambda: fetch_head_to_head_fixtures(
-                        home_id, away_id, api_key=key, before_date=fixture_date, limit=10
-                    ),
-                    7 * 24 * 60 * 60,
-                )
+            if not h2h_matches and key:
+                try:
+                    h2h_matches = self.cached_provider_data(
+                        f"h2h:{home_id}:{away_id}:{fixture_date}:10",
+                        lambda: fetch_head_to_head_fixtures(
+                            home_id, away_id, api_key=key, before_date=fixture_date, limit=10
+                        ),
+                        7 * 24 * 60 * 60,
+                    )
+                    self.historical_db.upsert_fixtures(h2h_matches)
+                    h2h_error = None
+                except ApiFootballError as h2h_exc:
+                    h2h_error = str(h2h_exc)
+            else:
                 h2h_error = None
-            except ApiFootballError as h2h_exc:
-                h2h_matches = []
-                h2h_error = str(h2h_exc)
         except ApiFootballError as exc:
             QMessageBox.warning(self, "Form data unavailable", str(exc))
             self.api_message.setText(str(exc))
