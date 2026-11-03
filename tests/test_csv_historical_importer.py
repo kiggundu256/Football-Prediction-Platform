@@ -154,6 +154,7 @@ class HistoricalCsvImporterTests(unittest.TestCase):
                 ) VALUES(999,39,2025,'Premier League','England','2025-08-10','FT',
                          1,'Arsenal',2,'Chelsea',2,1,'{"api":"kept"}','{}','now')"""
             )
+            db.commit()
         importer = HistoricalCsvImporter(self.database)
         result = importer.import_file(path, {
             "name": "Premier League", "country": "England", "league_id": -45678
