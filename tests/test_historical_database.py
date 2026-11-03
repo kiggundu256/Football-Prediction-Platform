@@ -72,9 +72,9 @@ class HistoricalDatabaseTests(unittest.TestCase):
         from csv_historical_importer import HistoricalCsvImporter
         path = Path(self.temp.name) / "history.csv"
         path.write_text(
-            "Date,HomeTeam,AwayTeam,FTHG,FTAG\\n"
-            "10/08/2025,Arsenal,Chelsea,2,1\\n"
-            "17/08/2025,Tottenham,Arsenal,0,1\\n",
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG\n"
+            "10/08/2025,Arsenal,Chelsea,2,1\n"
+            "17/08/2025,Tottenham,Arsenal,0,1\n",
             encoding="utf-8",
         )
         importer = HistoricalCsvImporter(self.db.path)
@@ -93,9 +93,9 @@ class HistoricalDatabaseTests(unittest.TestCase):
         from csv_historical_importer import HistoricalCsvImporter
         path = Path(self.temp.name) / "history.csv"
         path.write_text(
-            "Date,HomeTeam,AwayTeam,FTHG,FTAG\\n"
-            "10/08/2025,Arsenal,Chelsea,2,1\\n"
-            "17/08/2025,Chelsea,Arsenal,0,0\\n",
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG\n"
+            "10/08/2025,Arsenal,Chelsea,2,1\n"
+            "17/08/2025,Chelsea,Arsenal,0,0\n",
             encoding="utf-8",
         )
         importer = HistoricalCsvImporter(self.db.path)
