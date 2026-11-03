@@ -97,9 +97,9 @@ class HistoricalCsvImporterTests(unittest.TestCase):
 
     def test_embedded_seasons_are_imported_as_distinct_seasons(self):
         path = self.write_csv(
-            "Country,League,Season,Date,Home,Away,HG,AG,Res\\n"
-            "Argentina,Liga Profesional,2023/2024,10/08/2023,River Plate,Boca Juniors,2,1,H\\n"
-            "Argentina,Liga Profesional,2024/2025,10/08/2024,River Plate,Boca Juniors,1,0,H\\n"
+            "Country,League,Season,Date,Home,Away,HG,AG,Res\n"
+            "Argentina,Liga Profesional,2023/2024,10/08/2023,River Plate,Boca Juniors,2,1,H\n"
+            "Argentina,Liga Profesional,2024/2025,10/08/2024,River Plate,Boca Juniors,1,0,H\n"
         )
         importer = HistoricalCsvImporter(self.database)
         result = importer.import_file(path, {
@@ -115,8 +115,8 @@ class HistoricalCsvImporterTests(unittest.TestCase):
     def test_folder_scan_detects_football_data_league_and_season(self):
         path = self.root / "E0.csv"
         path.write_text(
-            "Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR\\n"
-            "E0,13/08/2021,Brentford,Arsenal,2,0,H\\n",
+            "Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR\n"
+            "E0,13/08/2021,Brentford,Arsenal,2,0,H\n",
             encoding="utf-8",
         )
         preview = inspect_csv_file(path)
