@@ -49,6 +49,27 @@ SOURCES = [
         "repo": "europe",
         "path_template": "france/{season}_fr1.txt",
     },
+    {
+        "code": "AFR_EG1",
+        "name": "Egyptian Premier League",
+        "country": "Egypt",
+        "repo": "world",
+        "path_template": "africa/egypt/{season}_eg1.txt",
+    },
+    {
+        "code": "AFR_MA1",
+        "name": "Botola Pro",
+        "country": "Morocco",
+        "repo": "world",
+        "path_template": "africa/morocco/{season}_ma1.txt",
+    },
+    {
+        "code": "AFR_DZ1",
+        "name": "Algerian Ligue 1",
+        "country": "Algeria",
+        "repo": "world",
+        "path_template": "africa/algeria/{season}_dz1.txt",
+    },
 ]
 
 COLUMNS = [
