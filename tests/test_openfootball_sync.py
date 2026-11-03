@@ -34,6 +34,24 @@ Sat Jan 1
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["Date"], "2022-01-01")
 
+
+    def test_parses_french_v_format_and_explicit_date_year(self):
+        sample = """
+= French Ligue 1 2022/23
+▪ Matchday 1
+  Fri Aug 5 2022
+    21:00  Olympique Lyonnais      v AC Ajaccio               2-1 (2-1)
+  Sat Aug 6
+    17:00  RC Strasbourg           v AS Monaco                1-2 (0-1)
+"""
+        rows = parse_season_text(sample, 2022, "2022-01-01")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["Date"], "2022-08-05")
+        self.assertEqual(rows[0]["HomeTeam"], "Olympique Lyonnais")
+        self.assertEqual(rows[0]["AwayTeam"], "AC Ajaccio")
+        self.assertEqual(rows[0]["FTHG"], 2)
+        self.assertEqual(rows[0]["HTAG"], 1)
+
     def test_ignores_unplayed_fixtures(self):
         sample = """
 = English Premier League 2022/23
