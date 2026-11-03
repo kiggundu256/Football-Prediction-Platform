@@ -12,6 +12,10 @@ The first automated connector covers:
 - Spain — La Liga
 - Germany — Bundesliga
 - Italy — Serie A
+- France — Ligue 1
+- Egypt — Egyptian Premier League (available seasons begin 2023/24)
+- Morocco — Botola Pro (available seasons begin 2023/24)
+- Algeria — Ligue 1 (available seasons begin 2023/24)
 
 The sync fetches season files from 2021/22 onward and enforces a hard date
 boundary of **2022-01-01**. This is intentional: January–May 2022 belongs to
@@ -19,7 +23,7 @@ the 2021/22 season, so that season must be included to avoid losing those
 matches. It also fetches season-start years through 2026/27 (the current
 season as of November 2026).
 
-The connector exports CSVs into `Data/OpenFootball_2022_2026/` using the
+The selected African repositories currently publish recent seasons from 2023/24; they do not provide a verified 2022 season archive. The connector exports CSVs into `Data/OpenFootball_2022_2026/` using the
 column names recognized by `csv_historical_importer.py`. It includes
 full-time and half-time goals when present. The source does not provide
 corners, shots, cards, xG, injuries or lineups; missing values are not
