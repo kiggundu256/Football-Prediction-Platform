@@ -86,10 +86,10 @@ The app is unsigned, so Windows may display a SmartScreen warning. Only run the 
 ## Automated public-domain historical data sync
 
 - A GitHub Actions workflow now synchronizes OpenFootball public-domain results weekly and on manual request.
-- The first connector covers the English Premier League, La Liga, Bundesliga and Serie A from **2022-01-01** through the latest available season files (including 2026/27).
+- The first connector covers the English Premier League, La Liga, Bundesliga, Serie A, Ligue 1, and available recent seasons for Egypt, Morocco and Algeria from **2022-01-01** through the latest available season files (including 2026/27).
 - January–May 2022 is retained by fetching the 2021/22 season and filtering out every match before 2022-01-01.
 - Normalized CSV files are written to `Data/OpenFootball_2022_2026/` and use headers recognized by the existing Historical CSV importer.
-- Full-time and half-time scores are imported where available. OpenFootball does not supply corners, shots, cards, xG, injuries or lineups; those fields remain unavailable rather than being invented.
+- Full-time and half-time scores are imported where available. African repository coverage currently starts in 2023/24, where those files exist. OpenFootball does not supply corners, shots, cards, xG, injuries or lineups; those fields remain unavailable rather than being invented.
 - API-Football remains in place for fixture intelligence, injuries and lineups.
 - After a sync, use Data Library → Import Historical CSV to add the generated CSVs to the existing local SQLite archive. Existing records and prediction history are not deleted.
 - See [Historical Data Sync](docs/HISTORICAL_DATA_SYNC.md) for sources, scope and instructions.
