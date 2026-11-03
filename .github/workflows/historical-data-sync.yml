@@ -1,0 +1,46 @@
+name: Historical football data sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_year:
+        description: "Earliest calendar year to include"
+        required: false
+        default: "2022"
+      to_year:
+        description: "Latest season start year to fetch"
+        required: false
+        default: "2026"
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  sync-openfootball:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download and normalize public-domain results
+        env:
+          FROM_YEAR: ${{ github.event.inputs.from_year || '2022' }}
+          TO_YEAR: ${{ github.event.inputs.to_year || '2026' }}
+        run: |
+          python scripts/sync_openfootball_data.py --from-year "$FROM_YEAR" --to-year "$TO_YEAR"
+      - name: Commit updated historical CSV files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Data/OpenFootball_2022_2026/
+          if git diff --cached --quiet; then
+            echo "No historical data changes to commit."
+          else
+            git commit -m "Sync public-domain football results from 2022 onward"
+            git push
+          fi
