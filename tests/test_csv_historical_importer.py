@@ -5,7 +5,7 @@ import json
 import sqlite3
 from contextlib import closing
 
-from csv_historical_importer import HistoricalCsvImporter, parse_csv_matches
+from csv_historical_importer import (HistoricalCsvImporter, parse_csv_matches, inspect_csv_file, scan_csv_folder)
 from historical_database import HistoricalDatabase
 
 COMPETITION = {"name": "Premier League", "country": "England", "league_id": 39}
@@ -93,6 +93,39 @@ class HistoricalCsvImporterTests(unittest.TestCase):
         self.assertEqual(matches[0]["away_team"], "Boca Juniors")
         self.assertEqual(matches[0]["home_goals"], 2)
         self.assertEqual(matches[0]["payload_json"]["csv_source"]["result"], "H")
+
+
+    def test_embedded_seasons_are_imported_as_distinct_seasons(self):
+        path = self.write_csv(
+            "Country,League,Season,Date,Home,Away,HG,AG,Res\\n"
+            "Argentina,Liga Profesional,2023/2024,10/08/2023,River Plate,Boca Juniors,2,1,H\\n"
+            "Argentina,Liga Profesional,2024/2025,10/08/2024,River Plate,Boca Juniors,1,0,H\\n"
+        )
+        importer = HistoricalCsvImporter(self.database)
+        result = importer.import_file(path, {
+            "name": "Liga Profesional", "country": "Argentina", "league_id": -12345
+        }, 2021)
+        self.assertEqual(result["seasons"], [2023, 2024])
+        with closing(sqlite3.connect(self.database)) as db:
+            seasons = [row[0] for row in db.execute(
+                "SELECT DISTINCT season FROM historical_matches ORDER BY season"
+            )]
+        self.assertEqual(seasons, [2023, 2024])
+
+    def test_folder_scan_detects_football_data_league_and_season(self):
+        path = self.root / "E0.csv"
+        path.write_text(
+            "Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR\\n"
+            "E0,13/08/2021,Brentford,Arsenal,2,0,H\\n",
+            encoding="utf-8",
+        )
+        preview = inspect_csv_file(path)
+        self.assertEqual(preview["competition"], "Premier League")
+        self.assertEqual(preview["country"], "England")
+        self.assertEqual(preview["season"], "2021")
+        scanned, errors = scan_csv_folder(self.root)
+        self.assertTrue(any(item["file_name"] == "E0.csv" for item in scanned))
+        self.assertFalse(errors)
 
     def test_windows_1252_team_names_are_supported(self):
         path = self.root / "encoded.csv"
