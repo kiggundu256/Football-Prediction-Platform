@@ -68,6 +68,34 @@ class HistoricalDatabaseTests(unittest.TestCase):
         stats = self.db.stats()
         self.assertEqual(stats["with_statistics"], 1)
 
+    def test_clear_csv_imports_preserves_api_matches(self):
+        api_match = fixture(101, "2025-08-10", 10, 20, 2, 1)
+        csv_match = fixture(-202, "2022-08-10", -10, -20, 1, 0)
+        csv_match["league"]["id"] = -39
+        self.db.upsert_fixtures([api_match, csv_match])
+        with self.db.connect() as db:
+            db.execute("""
+                CREATE TABLE historical_csv_imports (
+                    id INTEGER PRIMARY KEY, file_name TEXT, file_sha256 TEXT,
+                    league_id INTEGER, season INTEGER, competition TEXT,
+                    imported_rows INTEGER, skipped_rows INTEGER, imported_at_utc TEXT
+                )
+            """)
+            db.execute(
+                "INSERT INTO historical_csv_imports(file_name) VALUES(?)",
+                ("sample.csv",),
+            )
+
+        result = self.db.clear_csv_imports()
+        self.assertEqual(result["matches_removed"], 1)
+        self.assertEqual(result["imports_removed"], 1)
+        with self.db.connect() as db:
+            ids = [row[0] for row in db.execute(
+                "SELECT fixture_id FROM historical_matches"
+            ).fetchall()]
+        self.assertEqual(ids, [101])
+        self.assertEqual(self.db.stats()["matches"], 1)
+
     def test_sync_history_and_season_summary(self):
         competition = {"name": "Premier League", "country": "England", "league_id": 39}
         self.db.record_sync(competition, 2025, 380, 380)
