@@ -351,6 +351,7 @@ class HistoricalCsvImporter:
                       match["home_team_id"], match["home_team"], match["away_team_id"],
                       match["away_team"], match["home_goals"], match["away_goals"],
                       stats_json, json.dumps(match["payload_json"]), now))
+                stored += 1
             db.execute("""
                 INSERT INTO historical_csv_imports
                     (file_name,file_sha256,league_id,season,competition,imported_rows,
