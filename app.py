@@ -34,7 +34,7 @@ from settlement import settle_markets
 from performance_metrics import summarize_performance
 from fixture_view import filter_fixtures, competition_options, fixture_status_group
 from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
-from csv_historical_importer import HistoricalCsvImporter, scan_csv_folder, _stable_id
+from csv_historical_importer import HistoricalCsvImporter, scan_csv_folder, _stable_id, _season_start
 from historical_reconciliation import HistoricalReconciliation
 from player_intelligence import PlayerIntelligenceDatabase
 
@@ -792,7 +792,9 @@ class MainWindow(QMainWindow):
                     failed += 1
                     continue
                 try:
-                    fallback_season = int(season_text) if season_text not in ("AUTO", "CHECK", "") else 2021
+                    if season_text in ("CHECK", ""):
+                        raise ValueError("Enter the correct season in the preview table before importing this file.")
+                    fallback_season = 2021 if season_text == "AUTO" else _season_start(season_text, 2021)
                     competition = {
                         "name": competition_name, "country": country,
                         "league_id": _stable_id(f"csv-league|{country.casefold()}|{competition_name.casefold()}"),
@@ -823,7 +825,7 @@ class MainWindow(QMainWindow):
             f"match rows stored: {stored:,}; invalid/incomplete rows skipped: {skipped:,}."
         )
         if errors:
-            summary += "\\n" + "\\n".join(errors[:8])
+            summary += "\n" + "\n".join(errors[:8])
         self.library_status.setText(summary)
         QMessageBox.information(self, "Bulk CSV import complete", summary)
 
