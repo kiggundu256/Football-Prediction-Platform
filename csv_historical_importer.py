@@ -130,6 +130,16 @@ FOOTBALL_DATA_COMPETITIONS = {
     "NOR": ("Eliteserien", "Norway"), "POL": ("Ekstraklasa", "Poland"),
     "ROU": ("Liga I", "Romania"), "SWE": ("Allsvenskan", "Sweden"),
     "SWZ": ("Super League", "Switzerland"), "AUT": ("Bundesliga", "Austria"),
+    "E01": ("Premier League", "England"), "E10": ("Championship", "England"),
+    "E11": ("Championship", "England"), "E21": ("League One", "England"),
+    "E31": ("League Two", "England"), "B11": ("First Division A", "Belgium"),
+    "D11": ("Bundesliga", "Germany"), "D21": ("2. Bundesliga", "Germany"),
+    "I11": ("Serie A", "Italy"), "I21": ("Serie B", "Italy"),
+    "F11": ("Ligue 1", "France"), "F21": ("Ligue 2", "France"),
+    "SP11": ("La Liga", "Spain"), "SP21": ("Segunda Division", "Spain"),
+    "P11": ("Primeira Liga", "Portugal"), "SC01": ("Premiership", "Scotland"),
+    "SC11": ("Championship", "Scotland"), "SC21": ("League One", "Scotland"),
+    "SC31": ("League Two", "Scotland"),
 }
 
 
@@ -212,7 +222,7 @@ def parse_csv_matches(path, competition, season):
             away_id = _stable_id(f"{competition_id}|team|{away.casefold()}")
             stats = {}
             for field in ALIASES:
-                if field not in columns or field in ("date", "home", "away", "hg", "ag", "result"):
+                if field not in columns or field in ("date", "home", "away", "hg", "ag", "result", "season", "country", "competition_name"):
                     continue
                 value = _number(row.get(columns[field]))
                 if value is not None:
