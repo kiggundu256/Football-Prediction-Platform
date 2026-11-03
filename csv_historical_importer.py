@@ -316,7 +316,20 @@ class HistoricalCsvImporter:
                 VALUES(?,?,?) ON CONFLICT(league_id) DO UPDATE SET
                 name=excluded.name,country=excluded.country
             """, (int(competition["league_id"]), competition["name"], competition.get("country")))
+            stored = duplicate_rows = 0
             for match in matches:
+                existing = db.execute("""
+                    SELECT fixture_id FROM historical_matches
+                    WHERE season=? AND match_date=? AND lower(home_team)=?
+                      AND lower(away_team)=? AND lower(competition)=?
+                      AND lower(COALESCE(country, ''))=?
+                    LIMIT 1
+                """, (match["season"], match["match_date"], match["home_team"].casefold(),
+                      match["away_team"].casefold(), match["competition"].casefold(),
+                      str(match["country"] or "").casefold())).fetchone()
+                if existing and int(existing[0]) != int(match["fixture_id"]):
+                    duplicate_rows += 1
+                    continue
                 stats_json = json.dumps(match["stats_json"]) if match["stats_json"] else None
                 db.execute("""
                     INSERT INTO historical_matches(
@@ -344,10 +357,11 @@ class HistoricalCsvImporter:
                      skipped_rows,imported_at_utc) VALUES(?,?,?,?,?,?,?,?)
             """, (Path(path).name, digest, int(competition["league_id"]),
                   min(m["season"] for m in matches), competition["name"],
-                  len(matches), summary["skipped"], now))
+                  stored, summary["skipped"], now))
         imported_seasons = sorted({m["season"] for m in matches})
         summary.update({"file_name": Path(path).name, "sha256": digest,
                         "competition": competition["name"],
                         "season": imported_seasons[0] if len(imported_seasons) == 1 else "multiple",
-                        "seasons": imported_seasons, "stored": len(matches)})
+                        "seasons": imported_seasons, "stored": stored,
+                        "duplicate_rows": duplicate_rows})
         return summary
