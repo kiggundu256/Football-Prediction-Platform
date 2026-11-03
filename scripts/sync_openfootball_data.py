@@ -117,14 +117,14 @@ def parse_season_text(text, start_year, min_date):
 
         if not current_date or current_date < min_date:
             continue
-        match = MATCH_LINE.match(line)
-        if match:
-            _kickoff, home, home_goals, away_goals, ht_home, ht_away, away = match.groups()
-        else:
-            match_v = MATCH_LINE_V.match(line)
-            if not match_v:
-                continue
+        match_v = MATCH_LINE_V.match(line)
+        if match_v:
             _kickoff, home, away, home_goals, away_goals, ht_home, ht_away = match_v.groups()
+        else:
+            match = MATCH_LINE.match(line)
+            if not match:
+                continue
+            _kickoff, home, home_goals, away_goals, ht_home, ht_away, away = match.groups()
         home = " ".join(home.split()).strip()
         away = " ".join(away.split()).strip()
         if not home or not away:
