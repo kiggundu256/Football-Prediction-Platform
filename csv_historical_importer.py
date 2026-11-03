@@ -70,7 +70,11 @@ def _stable_id(value):
 
 
 def _read_rows(path):
-    try:\n        raw = Path(path).read_text(encoding="utf-8-sig")\n    except UnicodeDecodeError:\n        # Football-Data archives may contain Windows-1252 team/referee names.\n        raw = Path(path).read_text(encoding="cp1252")
+    try:
+        raw = Path(path).read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        # Football-Data archives may contain Windows-1252 team/referee names.
+        raw = Path(path).read_text(encoding="cp1252")
     if not raw.strip():
         raise ValueError("The selected CSV file is empty.")
     try:
