@@ -777,7 +777,7 @@ class MainWindow(QMainWindow):
         self.bulk_import_csv_button.setEnabled(False)
         self.scan_csv_folder_button.setEnabled(False)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        succeeded = failed = stored = skipped = 0
+        succeeded = failed = stored = skipped = duplicates = 0
         errors = []
         try:
             for row_index in range(count):
@@ -806,6 +806,7 @@ class MainWindow(QMainWindow):
                     succeeded += 1
                     stored += result["stored"]
                     skipped += result["skipped"]
+                    duplicates += result.get("duplicate_rows", 0)
                     seasons = ", ".join(map(str, result.get("seasons", [result["season"]])))
                     self.csv_folder_preview.item(row_index, 6).setText(
                         f"Imported {result['stored']:,} • seasons {seasons}"
@@ -822,7 +823,8 @@ class MainWindow(QMainWindow):
         self.refresh_data_library()
         summary = (
             f"Bulk import finished. Files imported: {succeeded}; failed: {failed}; "
-            f"match rows stored: {stored:,}; invalid/incomplete rows skipped: {skipped:,}."
+            f"match rows stored: {stored:,}; existing matches not duplicated: {duplicates:,}; "
+            f"invalid/incomplete rows skipped: {skipped:,}."
         )
         if errors:
             summary += "\n" + "\n".join(errors[:8])
