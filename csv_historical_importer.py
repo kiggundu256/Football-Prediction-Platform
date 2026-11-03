@@ -14,6 +14,9 @@ ALIASES = {
     "hg": ("fthg", "hg", "home_score", "home_goals", "goals_home", "full_time_home_goals"),
     "ag": ("ftag", "ag", "away_score", "away_goals", "goals_away", "full_time_away_goals"),
     "result": ("ftr", "res", "result", "full_time_result", "match_result"),
+    "season": ("season", "season_year", "year"),
+    "country": ("country",),
+    "competition_name": ("league", "competition", "division_name"),
     "home_corners": ("hc", "home_corners", "corners_home"),
     "away_corners": ("ac", "away_corners", "corners_away"),
     "home_yellow": ("hy", "home_yellow_cards", "yellow_cards_home"),
@@ -100,6 +103,89 @@ def _read_rows(path):
     return reader, columns
 
 
+
+def _season_start(value, fallback):
+    """Convert labels such as 2024/25 or 2024-2025 to their start year."""
+    match = re.search(r"(19|20)\\d{2}", str(value or ""))
+    return int(match.group(0)) if match else int(fallback)
+
+
+FOOTBALL_DATA_COMPETITIONS = {
+    "E0": ("Premier League", "England"), "E1": ("Championship", "England"),
+    "E2": ("League One", "England"), "E3": ("League Two", "England"),
+    "EC": ("National League", "England"), "D1": ("Bundesliga", "Germany"),
+    "D2": ("2. Bundesliga", "Germany"), "I1": ("Serie A", "Italy"),
+    "I2": ("Serie B", "Italy"), "SP1": ("La Liga", "Spain"),
+    "SP2": ("Segunda Division", "Spain"), "F1": ("Ligue 1", "France"),
+    "F2": ("Ligue 2", "France"), "N1": ("Eredivisie", "Netherlands"),
+    "B1": ("First Division A", "Belgium"), "B2": ("First Division B", "Belgium"),
+    "P1": ("Primeira Liga", "Portugal"), "T1": ("Super Lig", "Turkey"),
+    "G1": ("Super League", "Greece"), "SC0": ("Premiership", "Scotland"),
+    "SC1": ("Championship", "Scotland"), "SC2": ("League One", "Scotland"),
+    "SC3": ("League Two", "Scotland"), "ARG": ("Liga Profesional", "Argentina"),
+    "BRA": ("Serie A", "Brazil"), "USA": ("Major League Soccer", "USA"),
+    "JPN": ("J1 League", "Japan"), "MEX": ("Liga MX", "Mexico"),
+    "CHN": ("Super League", "China"), "DNK": ("Superliga", "Denmark"),
+    "FIN": ("Veikkausliiga", "Finland"), "IRL": ("Premier Division", "Ireland"),
+    "NOR": ("Eliteserien", "Norway"), "POL": ("Ekstraklasa", "Poland"),
+    "ROU": ("Liga I", "Romania"), "SWE": ("Allsvenskan", "Sweden"),
+    "SWZ": ("Super League", "Switzerland"), "AUT": ("Bundesliga", "Austria"),
+}
+
+
+def inspect_csv_file(path):
+    """Read dataset metadata for a review screen; does not modify the database."""
+    reader, columns = _read_rows(path)
+    rows = list(reader)
+    stem = Path(path).stem.split(" ")[0].split("(")[0].strip().upper()
+    mapped_name, mapped_country = FOOTBALL_DATA_COMPETITIONS.get(stem, (Path(path).stem, ""))
+    league_values = sorted({str(r.get(columns["competition_name"]) or "").strip()
+                            for r in rows if columns.get("competition_name") and
+                            str(r.get(columns["competition_name"]) or "").strip()})
+    country_values = sorted({str(r.get(columns["country"]) or "").strip()
+                             for r in rows if columns.get("country") and
+                             str(r.get(columns["country"]) or "").strip()})
+    season_values = sorted({str(r.get(columns["season"]) or "").strip()
+                            for r in rows if columns.get("season") and
+                            str(r.get(columns["season"]) or "").strip()})
+    dates = []
+    for row in rows:
+        try:
+            dates.append(_date(row.get(columns["date"])))
+        except ValueError:
+            pass
+    competition_name = league_values[0] if league_values else mapped_name or Path(path).stem
+    country = country_values[0] if country_values else mapped_country
+    if season_values:
+        seasons = sorted({_season_start(value, 2021) for value in season_values})
+        season_label = "AUTO" if columns.get("season") else str(seasons[0])
+    elif dates:
+        first = min(dates)
+        year, month = int(first[:4]), int(first[5:7])
+        seasons = [year if month >= 7 else year - 1]
+        season_label = str(seasons[0])
+    else:
+        seasons, season_label = [], "CHECK"
+    return {
+        "path": str(Path(path)), "file_name": Path(path).name,
+        "competition": competition_name.strip(), "country": country,
+        "season": season_label, "seasons": seasons, "rows": len(rows),
+        "date_from": min(dates) if dates else "", "date_to": max(dates) if dates else "",
+        "has_season_column": bool(columns.get("season")),
+    }
+
+
+def scan_csv_folder(folder):
+    """Inspect CSV files in a folder and return previews plus per-file errors."""
+    previews, errors = [], []
+    for path in sorted(Path(folder).glob("*.csv")):
+        try:
+            previews.append(inspect_csv_file(path))
+        except (OSError, ValueError, csv.Error) as exc:
+            errors.append(f"{path.name}: {exc}")
+    return previews, errors
+
+
 def parse_csv_matches(path, competition, season):
     reader, columns = _read_rows(path)
     matches, skipped, errors = [], 0, []
@@ -119,7 +205,8 @@ def parse_csv_matches(path, competition, season):
             result = str(row.get(columns.get("result", "")) or "").strip().upper()
             if result not in ("H", "D", "A"):
                 result = "H" if hg > ag else "A" if ag > hg else "D"
-            match_key = "|".join((str(competition_id), str(season), day, home.casefold(), away.casefold()))
+            row_season = _season_start(row.get(columns.get("season", "")), season)
+            match_key = "|".join((str(competition_id), str(row_season), day, home.casefold(), away.casefold()))
             fixture_id = _stable_id(match_key)
             home_id = _stable_id(f"{competition_id}|team|{home.casefold()}")
             away_id = _stable_id(f"{competition_id}|team|{away.casefold()}")
@@ -137,7 +224,7 @@ def parse_csv_matches(path, competition, season):
             payload = {
                 "fixture": {"id": fixture_id, "date": f"{day}T12:00:00+00:00", "status": {"short": "FT"}},
                 "league": {"id": competition_id, "name": competition["name"],
-                           "country": competition.get("country"), "season": int(season)},
+                           "country": competition.get("country"), "season": int(row_season)},
                 "teams": {"home": {"id": home_id, "name": home}, "away": {"id": away_id, "name": away}},
                 "goals": {"home": int(hg), "away": int(ag)},
                 "score": {"fulltime": {"home": int(hg), "away": int(ag)}},
@@ -145,7 +232,7 @@ def parse_csv_matches(path, competition, season):
                                "result": result, "statistics": stats},
             }
             matches.append({
-                "fixture_id": fixture_id, "league_id": competition_id, "season": int(season),
+                "fixture_id": fixture_id, "league_id": competition_id, "season": int(row_season),
                 "competition": competition["name"], "country": competition.get("country"),
                 "match_date": day, "home_team_id": home_id, "home_team": home,
                 "away_team_id": away_id, "away_team": away, "home_goals": int(hg),
@@ -237,9 +324,12 @@ class HistoricalCsvImporter:
                 INSERT INTO historical_csv_imports
                     (file_name,file_sha256,league_id,season,competition,imported_rows,
                      skipped_rows,imported_at_utc) VALUES(?,?,?,?,?,?,?,?)
-            """, (Path(path).name, digest, int(competition["league_id"]), int(season),
-                  competition["name"], len(matches), summary["skipped"], now))
+            """, (Path(path).name, digest, int(competition["league_id"]),
+                  min(m["season"] for m in matches), competition["name"],
+                  len(matches), summary["skipped"], now))
+        imported_seasons = sorted({m["season"] for m in matches})
         summary.update({"file_name": Path(path).name, "sha256": digest,
-                        "competition": competition["name"], "season": int(season),
-                        "stored": len(matches)})
+                        "competition": competition["name"],
+                        "season": imported_seasons[0] if len(imported_seasons) == 1 else "multiple",
+                        "seasons": imported_seasons, "stored": len(matches)})
         return summary
