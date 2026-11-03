@@ -42,6 +42,13 @@ SOURCES = [
         "repo": "italy",
         "file": "1-seriea.txt",
     },
+    {
+        "code": "FRA_1",
+        "name": "Ligue 1",
+        "country": "France",
+        "repo": "europe",
+        "path_template": "france/{season}_fr1.txt",
+    },
 ]
 
 COLUMNS = [
@@ -72,8 +79,11 @@ def parse_season_text(text, start_year, min_date):
         if date_match:
             month = MONTHS[date_match.group(1)]
             day = int(date_match.group(2))
-            year = start_year if month >= 7 else start_year + 1
+            explicit_year = date_match.group(3)
+            year = int(explicit_year) if explicit_year else (start_year if month >= 7 else start_year + 1)
             try:
+                from datetime import date
+                date(year, month, day)
                 current_date = f"{year:04d}-{month:02d}-{day:02d}"
             except ValueError:
                 current_date = None
@@ -82,10 +92,13 @@ def parse_season_text(text, start_year, min_date):
         if not current_date or current_date < min_date:
             continue
         match = MATCH_LINE.match(line)
-        if not match:
-            continue
-
-        _kickoff, home, home_goals, away_goals, ht_home, ht_away, away = match.groups()
+        if match:
+            _kickoff, home, home_goals, away_goals, ht_home, ht_away, away = match.groups()
+        else:
+            match_v = MATCH_LINE_V.match(line)
+            if not match_v:
+                continue
+            _kickoff, home, away, home_goals, away_goals, ht_home, ht_away = match_v.groups()
         home = " ".join(home.split()).strip()
         away = " ".join(away.split()).strip()
         if not home or not away:
@@ -121,9 +134,10 @@ def collect_source(source, first_season, last_season, min_date):
     errors = []
     for start_year in range(first_season, last_season + 1):
         season = f"{start_year}-{str(start_year + 1)[-2:]}"
+        source_path = source.get("path_template", f"{season}/{source.get('file', '')}").format(season=season)
         url = (
             f"https://raw.githubusercontent.com/openfootball/{source['repo']}/"
-            f"master/{season}/{source['file']}"
+            f"master/{source_path}"
         )
         try:
             text = fetch_text(url)
