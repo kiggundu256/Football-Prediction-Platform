@@ -32,6 +32,11 @@ ALIASES = {
     "away_odds": ("b365a", "psa", "away_odds", "odds_away", "avgca"),
     "home_possession": ("home_possession", "possession_home"),
     "away_possession": ("away_possession", "possession_away"),
+    "home_xg": ("hxg", "home_xg", "xg_home"),
+    "away_xg": ("axg", "away_xg", "xg_away"),
+    "home_fouls": ("hf", "home_fouls", "fouls_home"),
+    "away_fouls": ("af", "away_fouls", "fouls_away"),
+    "referee": ("referee", "ref"),
 }
 
 
@@ -139,7 +144,8 @@ FOOTBALL_DATA_COMPETITIONS = {
     "SP11": ("La Liga", "Spain"), "SP21": ("Segunda Division", "Spain"),
     "P11": ("Primeira Liga", "Portugal"), "SC01": ("Premiership", "Scotland"),
     "SC11": ("Championship", "Scotland"), "SC21": ("League One", "Scotland"),
-    "SC31": ("League Two", "Scotland"),
+    "SC31": ("League Two", "Scotland"), "EC1": ("National League", "England"),
+    "G11": ("Super League", "Greece"), "N11": ("Eredivisie", "Netherlands"),
 }
 
 
@@ -222,7 +228,7 @@ def parse_csv_matches(path, competition, season):
             away_id = _stable_id(f"{competition_id}|team|{away.casefold()}")
             stats = {}
             for field in ALIASES:
-                if field not in columns or field in ("date", "home", "away", "hg", "ag", "result", "season", "country", "competition_name"):
+                if field not in columns or field in ("date", "home", "away", "hg", "ag", "result", "season", "country", "competition_name", "referee"):
                     continue
                 value = _number(row.get(columns[field]))
                 if value is not None:
@@ -239,7 +245,9 @@ def parse_csv_matches(path, competition, season):
                 "goals": {"home": int(hg), "away": int(ag)},
                 "score": {"fulltime": {"home": int(hg), "away": int(ag)}},
                 "csv_source": {"provider": "csv", "original_file": Path(path).name,
-                               "result": result, "statistics": stats},
+                               "result": result,
+                               "referee": str(row.get(columns.get("referee", "")) or "").strip() or None,
+                               "statistics": stats},
             }
             matches.append({
                 "fixture_id": fixture_id, "league_id": competition_id, "season": int(row_season),
