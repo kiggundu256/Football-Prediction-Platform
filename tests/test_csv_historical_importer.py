@@ -84,8 +84,8 @@ class HistoricalCsvImporterTests(unittest.TestCase):
 
     def test_consolidated_football_data_columns_are_recognized(self):
         path = self.write_csv(
-            "Country,League,Season,Date,Home,Away,HG,AG,Res\\n"
-            "Argentina,Liga Profesional,2025,10/08/2025,River Plate,Boca Juniors,2,1,H\\n"
+            "Country,League,Season,Date,Home,Away,HG,AG,Res\n"
+            "Argentina,Liga Profesional,2025,10/08/2025,River Plate,Boca Juniors,2,1,H\n"
         )
         matches, summary = parse_csv_matches(path, COMPETITION, 2025)
         self.assertEqual(summary["parsed"], 1)
@@ -97,8 +97,8 @@ class HistoricalCsvImporterTests(unittest.TestCase):
     def test_windows_1252_team_names_are_supported(self):
         path = self.root / "encoded.csv"
         path.write_bytes(
-            "Date,HomeTeam,AwayTeam,FTHG,FTAG\\n"
-            "10/08/2025,Atlético Madrid,Sevilla,2,1\\n".encode("cp1252")
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG\n"
+            "10/08/2025,Atlético Madrid,Sevilla,2,1\n".encode("cp1252")
         )
         matches, summary = parse_csv_matches(path, COMPETITION, 2025)
         self.assertEqual(summary["parsed"], 1)
