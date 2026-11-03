@@ -22,6 +22,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: historical-data-sync-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   sync-openfootball:
     runs-on: ubuntu-latest
