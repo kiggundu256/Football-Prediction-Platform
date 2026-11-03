@@ -647,6 +647,13 @@ class MainWindow(QMainWindow):
         refresh.clicked.connect(self.refresh_data_library)
         actions.addWidget(refresh)
         box.addLayout(actions)
+        synced_actions = QHBoxLayout()
+        self.import_synced_data_button = QPushButton("Import Synced 2022+ Dataset")
+        self.import_synced_data_button.clicked.connect(self.import_synced_openfootball_data)
+        synced_actions.addWidget(self.import_synced_data_button)
+        synced_actions.addWidget(QLabel("Bundled public-domain results: 2022 onward"))
+        synced_actions.addStretch()
+        box.addLayout(synced_actions)
         self.csv_folder_preview = QTableWidget(0, 7)
         self.csv_folder_preview.setHorizontalHeaderLabels([
             "CSV file", "Competition (edit if needed)", "Country (edit if needed)",
@@ -746,6 +753,60 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "CSV history cleared", summary)
         except Exception as exc:
             QMessageBox.critical(self, "Could not clear CSV history", str(exc))
+
+    def import_synced_openfootball_data(self):
+        """Load the repository's bundled 2022+ public-domain CSV archive."""
+        base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        folder = base / "Data" / "OpenFootball_2022_2026"
+        if not folder.exists():
+            source_folder = Path(__file__).resolve().parent / "Data" / "OpenFootball_2022_2026"
+            if source_folder.exists():
+                folder = source_folder
+        if not folder.exists():
+            QMessageBox.information(
+                self, "Synced dataset not found",
+                "The bundled 2022+ archive is not present in this app build. "
+                "Pull the latest GitHub changes and download the latest Windows build."
+            )
+            return
+
+        self.csv_folder_path = str(folder)
+        self.library_status.setText("Checking the bundled 2022+ historical archive...")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            previews, errors = scan_csv_folder(folder)
+        except Exception as exc:
+            QMessageBox.warning(self, "Synced dataset scan", str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        self.csv_folder_preview.setRowCount(len(previews))
+        for row_index, item in enumerate(previews):
+            file_item = QTableWidgetItem(item["file_name"])
+            file_item.setData(Qt.ItemDataRole.UserRole, item["path"])
+            file_item.setFlags(file_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            values = [
+                file_item, QTableWidgetItem(item["competition"]),
+                QTableWidgetItem(item["country"]),
+                QTableWidgetItem(str(item["season"])), QTableWidgetItem(str(item["rows"])),
+                QTableWidgetItem(f"{item['date_from']} to {item['date_to']}"),
+                QTableWidgetItem("Ready for review"),
+            ]
+            for column, cell in enumerate(values):
+                if column not in (1, 2, 3):
+                    cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.csv_folder_preview.setItem(row_index, column, cell)
+
+        self.bulk_import_csv_button.setEnabled(bool(previews))
+        summary = f"Synced archive found: {len(previews)} CSV file(s) ready for import."
+        if errors:
+            summary += " Some files could not be read: " + " | ".join(errors[:5])
+        self.library_status.setText(summary)
+        if not previews:
+            QMessageBox.information(self, "Synced dataset", summary)
+            return
+        self.import_reviewed_csv_files()
 
     def scan_historical_csv_folder(self):
         folder = QFileDialog.getExistingDirectory(
