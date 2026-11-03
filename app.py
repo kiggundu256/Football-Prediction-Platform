@@ -640,6 +640,9 @@ class MainWindow(QMainWindow):
         self.bulk_import_csv_button.clicked.connect(self.import_reviewed_csv_files)
         self.bulk_import_csv_button.setEnabled(False)
         actions.addWidget(self.bulk_import_csv_button)
+        self.clear_csv_imports_button = QPushButton("Clear CSV Imports")
+        self.clear_csv_imports_button.clicked.connect(self.clear_csv_imports)
+        actions.addWidget(self.clear_csv_imports_button)
         refresh = QPushButton("Refresh Summary")
         refresh.clicked.connect(self.refresh_data_library)
         actions.addWidget(refresh)
@@ -720,6 +723,29 @@ class MainWindow(QMainWindow):
                     self.csv_import_history_table.setItem(
                         row_index, column, QTableWidgetItem(str(value))
                     )
+
+    def clear_csv_imports(self):
+        answer = QMessageBox.question(
+            self, "Clear CSV-imported history",
+            "This will permanently remove all matches imported from CSV files and the CSV import history. "
+            "API-Football records and API sync history will be preserved. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            result = self.historical_db.clear_csv_imports()
+            self.refresh_data_library()
+            summary = (
+                f"Removed {result['matches_removed']:,} CSV match(es) and "
+                f"{result['imports_removed']:,} CSV import-history record(s). "
+                "API-Football records were preserved."
+            )
+            self.library_status.setText(summary)
+            QMessageBox.information(self, "CSV history cleared", summary)
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not clear CSV history", str(exc))
 
     def scan_historical_csv_folder(self):
         folder = QFileDialog.getExistingDirectory(
