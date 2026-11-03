@@ -34,7 +34,7 @@ from settlement import settle_markets
 from performance_metrics import summarize_performance
 from fixture_view import filter_fixtures, competition_options, fixture_status_group
 from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
-from csv_historical_importer import HistoricalCsvImporter
+from csv_historical_importer import HistoricalCsvImporter, scan_csv_folder, _stable_id
 from historical_reconciliation import HistoricalReconciliation
 from player_intelligence import PlayerIntelligenceDatabase
 
@@ -633,10 +633,30 @@ class MainWindow(QMainWindow):
         self.import_csv_button = QPushButton("Import Historical CSV")
         self.import_csv_button.clicked.connect(self.import_historical_csv)
         actions.addWidget(self.import_csv_button)
+        self.scan_csv_folder_button = QPushButton("Scan Data Folder")
+        self.scan_csv_folder_button.clicked.connect(self.scan_historical_csv_folder)
+        actions.addWidget(self.scan_csv_folder_button)
+        self.bulk_import_csv_button = QPushButton("Import Reviewed Files")
+        self.bulk_import_csv_button.clicked.connect(self.import_reviewed_csv_files)
+        self.bulk_import_csv_button.setEnabled(False)
+        actions.addWidget(self.bulk_import_csv_button)
         refresh = QPushButton("Refresh Summary")
         refresh.clicked.connect(self.refresh_data_library)
         actions.addWidget(refresh)
         box.addLayout(actions)
+        self.csv_folder_preview = QTableWidget(0, 7)
+        self.csv_folder_preview.setHorizontalHeaderLabels([
+            "CSV file", "Competition (edit if needed)", "Country (edit if needed)",
+            "Season / AUTO", "Rows", "Date range", "Import status"
+        ])
+        self.csv_folder_preview.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked |
+                                                 QTableWidget.EditTrigger.EditKeyPressed)
+        self.csv_folder_preview.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.csv_folder_preview.horizontalHeader().setStretchLastSection(True)
+        self.csv_folder_preview.setMinimumHeight(190)
+        enable_table_copy(self.csv_folder_preview)
+        box.addWidget(self.csv_folder_preview)
+        self.csv_folder_path = ""
         self.library_summary = QLabel("")
         self.library_summary.setWordWrap(True)
         self.library_status = QLabel("Manual synchronization only. Each season import generally uses one API request.")
@@ -700,6 +720,112 @@ class MainWindow(QMainWindow):
                     self.csv_import_history_table.setItem(
                         row_index, column, QTableWidgetItem(str(value))
                     )
+
+    def scan_historical_csv_folder(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select the folder containing your historical CSV files", ""
+        )
+        if not folder:
+            return
+        self.csv_folder_path = folder
+        self.library_status.setText("Scanning CSV files and reading their league, season and date information...")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            previews, errors = scan_csv_folder(folder)
+        except Exception as exc:
+            QMessageBox.warning(self, "CSV folder scan", str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.csv_folder_preview.setRowCount(len(previews))
+        for row_index, item in enumerate(previews):
+            file_item = QTableWidgetItem(item["file_name"])
+            file_item.setData(Qt.ItemDataRole.UserRole, item["path"])
+            file_item.setFlags(file_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            values = [
+                file_item, QTableWidgetItem(item["competition"]),
+                QTableWidgetItem(item["country"]),
+                QTableWidgetItem(str(item["season"])), QTableWidgetItem(str(item["rows"])),
+                QTableWidgetItem(f"{item['date_from']} to {item['date_to']}"),
+                QTableWidgetItem("Ready for review"),
+            ]
+            for column, cell in enumerate(values):
+                if column not in (1, 2, 3):
+                    cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.csv_folder_preview.setItem(row_index, column, cell)
+        self.bulk_import_csv_button.setEnabled(bool(previews))
+        summary = f"Folder scan complete: {len(previews)} CSV files ready for review."
+        if errors:
+            summary += f" {len(errors)} file(s) could not be read: " + " | ".join(errors[:5])
+        self.library_status.setText(summary)
+        if not previews:
+            QMessageBox.information(self, "CSV folder scan", summary)
+
+    def import_reviewed_csv_files(self):
+        count = self.csv_folder_preview.rowCount()
+        if not count:
+            return
+        answer = QMessageBox.question(
+            self, "Confirm bulk CSV import",
+            f"Import the {count} reviewed CSV file(s) into your local historical database? "
+            "Existing API-Football fixture records are preserved; CSV records use separate stable IDs.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.bulk_import_csv_button.setEnabled(False)
+        self.scan_csv_folder_button.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        succeeded = failed = stored = skipped = 0
+        errors = []
+        try:
+            for row_index in range(count):
+                file_item = self.csv_folder_preview.item(row_index, 0)
+                path = file_item.data(Qt.ItemDataRole.UserRole)
+                name = file_item.text()
+                competition_name = self.csv_folder_preview.item(row_index, 1).text().strip()
+                country = self.csv_folder_preview.item(row_index, 2).text().strip()
+                season_text = self.csv_folder_preview.item(row_index, 3).text().strip().upper()
+                if not competition_name:
+                    self.csv_folder_preview.item(row_index, 6).setText("Skipped: missing competition")
+                    failed += 1
+                    continue
+                try:
+                    fallback_season = int(season_text) if season_text not in ("AUTO", "CHECK", "") else 2021
+                    competition = {
+                        "name": competition_name, "country": country,
+                        "league_id": _stable_id(f"csv-league|{country.casefold()}|{competition_name.casefold()}"),
+                    }
+                    self.csv_folder_preview.item(row_index, 6).setText("Importing...")
+                    self.library_status.setText(f"Importing {name} ({row_index + 1}/{count})...")
+                    QApplication.processEvents()
+                    result = self.csv_importer.import_file(path, competition, fallback_season)
+                    succeeded += 1
+                    stored += result["stored"]
+                    skipped += result["skipped"]
+                    seasons = ", ".join(map(str, result.get("seasons", [result["season"]])))
+                    self.csv_folder_preview.item(row_index, 6).setText(
+                        f"Imported {result['stored']:,} • seasons {seasons}"
+                    )
+                except Exception as exc:
+                    failed += 1
+                    errors.append(f"{name}: {exc}")
+                    self.csv_folder_preview.item(row_index, 6).setText("Failed")
+                QApplication.processEvents()
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.scan_csv_folder_button.setEnabled(True)
+            self.bulk_import_csv_button.setEnabled(True)
+        self.refresh_data_library()
+        summary = (
+            f"Bulk import finished. Files imported: {succeeded}; failed: {failed}; "
+            f"match rows stored: {stored:,}; invalid/incomplete rows skipped: {skipped:,}."
+        )
+        if errors:
+            summary += "\\n" + "\\n".join(errors[:8])
+        self.library_status.setText(summary)
+        QMessageBox.information(self, "Bulk CSV import complete", summary)
 
     def import_historical_csv(self):
         path, _ = QFileDialog.getOpenFileName(
