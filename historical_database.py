@@ -205,6 +205,34 @@ class HistoricalDatabase:
                 FROM historical_syncs s ORDER BY s.competition,s.season DESC
             """).fetchall()]
 
+    def clear_csv_imports(self):
+        """Remove CSV-imported matches and import history, preserving API records."""
+        with self.connect() as db:
+            csv_matches = db.execute(
+                "SELECT COUNT(*) FROM historical_matches WHERE fixture_id < 0"
+            ).fetchone()[0]
+            db.execute("DELETE FROM historical_matches WHERE fixture_id < 0")
+
+            history_exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='historical_csv_imports'"
+            ).fetchone()
+            history_rows = 0
+            if history_exists:
+                history_rows = db.execute(
+                    "SELECT COUNT(*) FROM historical_csv_imports"
+                ).fetchone()[0]
+                db.execute("DELETE FROM historical_csv_imports")
+
+            db.execute("""
+                DELETE FROM historical_competitions
+                WHERE league_id < 0
+                  AND NOT EXISTS (
+                      SELECT 1 FROM historical_matches
+                      WHERE historical_matches.league_id = historical_competitions.league_id
+                  )
+            """)
+        return {"matches_removed": int(csv_matches), "imports_removed": int(history_rows)}
+
     def stats(self):
         with self.connect() as db:
             totals = db.execute("""
