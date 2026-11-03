@@ -142,6 +142,69 @@ class HistoricalDatabase:
                   competition.get("country"), int(match_count), int(completed_count),
                   now, status, error))
 
+    @staticmethod
+    def _team_name_key(value):
+        import re
+        return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+    def team_recent_matches_by_name(self, team_name, before_date, limit=5, provider_team_id=None):
+        """Find imported CSV history by normalized team name, independent of provider IDs."""
+        key = self._team_name_key(team_name)
+        if not key:
+            return []
+        with self.connect() as db:
+            rows = db.execute("""
+                SELECT payload_json FROM historical_matches
+                WHERE match_date < ? AND status IN ('FT','AET','PEN')
+                  AND home_goals IS NOT NULL AND away_goals IS NOT NULL
+                ORDER BY match_date DESC, fixture_id DESC
+            """, (before_date,)).fetchall()
+        matches = []
+        for row in rows:
+            match = json.loads(row["payload_json"])
+            teams = match.get("teams") or {}
+            home, away = teams.get("home") or {}, teams.get("away") or {}
+            if self._team_name_key(home.get("name")) == key:
+                if provider_team_id is not None:
+                    home["id"] = int(provider_team_id)
+                matches.append(match)
+            elif self._team_name_key(away.get("name")) == key:
+                if provider_team_id is not None:
+                    away["id"] = int(provider_team_id)
+                matches.append(match)
+            if len(matches) >= int(limit):
+                break
+        return matches
+
+    def head_to_head_matches_by_name(self, home_team, away_team, before_date, limit=10):
+        """Find imported CSV head-to-head history by normalized club names."""
+        home_key = self._team_name_key(home_team)
+        away_key = self._team_name_key(away_team)
+        if not home_key or not away_key:
+            return []
+        with self.connect() as db:
+            rows = db.execute("""
+                SELECT payload_json FROM historical_matches
+                WHERE match_date < ? AND status IN ('FT','AET','PEN')
+                  AND home_goals IS NOT NULL AND away_goals IS NOT NULL
+                ORDER BY match_date DESC, fixture_id DESC
+            """, (before_date,)).fetchall()
+        matches = []
+        for row in rows:
+            match = json.loads(row["payload_json"])
+            teams = match.get("teams") or {}
+            match_home = teams.get("home") or {}
+            match_away = teams.get("away") or {}
+            pair = (
+                self._team_name_key(match_home.get("name")),
+                self._team_name_key(match_away.get("name")),
+            )
+            if pair in ((home_key, away_key), (away_key, home_key)):
+                matches.append(match)
+                if len(matches) >= int(limit):
+                    break
+        return matches
+
     def team_recent_matches(self, team_id, before_date, limit=5):
         if not team_id:
             return []
