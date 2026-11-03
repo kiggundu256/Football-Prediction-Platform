@@ -1,6 +1,11 @@
 name: Historical football data sync
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/sync_openfootball_data.py'
+      - '.github/workflows/historical-data-sync.yml'
   workflow_dispatch:
     inputs:
       from_year:
