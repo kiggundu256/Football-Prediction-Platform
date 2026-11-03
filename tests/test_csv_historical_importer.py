@@ -127,6 +127,18 @@ class HistoricalCsvImporterTests(unittest.TestCase):
         self.assertTrue(any(item["file_name"] == "E0.csv" for item in scanned))
         self.assertFalse(errors)
 
+
+    def test_referee_and_expected_goals_are_retained_when_available(self):
+        path = self.write_csv(
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG,Referee,HxG,AxG,HF,AF,HC,AC\\n"
+            "10/08/2025,Arsenal,Chelsea,2,1,M Oliver,1.8,0.9,12,8,7,4\\n"
+        )
+        matches, _ = parse_csv_matches(path, COMPETITION, 2025)
+        source = matches[0]["payload_json"]["csv_source"]
+        self.assertEqual(source["referee"], "M Oliver")
+        self.assertEqual(matches[0]["stats_json"]["home_xg"], 1.8)
+        self.assertEqual(matches[0]["stats_json"]["away_fouls"], 8)
+
     def test_windows_1252_team_names_are_supported(self):
         path = self.root / "encoded.csv"
         path.write_bytes(
