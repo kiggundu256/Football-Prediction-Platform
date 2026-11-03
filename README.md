@@ -82,3 +82,14 @@ The app is unsigned, so Windows may display a SmartScreen warning. Only run the 
 - Original file name, CSV provider marker, normalized match payload, file SHA-256 and an import-history record are stored locally.
 - Invalid rows are skipped with row-level explanations; files missing required date, team or full-time-goal columns are rejected with a format hint.
 - CSV team identities are source-local and are not silently equated with API-Football IDs. Cross-provider team/fixture mapping is a later reconciliation step before CSV rows are mixed into provider-ID-based model queries.
+
+## Automated public-domain historical data sync
+
+- A GitHub Actions workflow now synchronizes OpenFootball public-domain results weekly and on manual request.
+- The first connector covers the English Premier League, La Liga, Bundesliga and Serie A from **2022-01-01** through the latest available season files (including 2026/27).
+- January–May 2022 is retained by fetching the 2021/22 season and filtering out every match before 2022-01-01.
+- Normalized CSV files are written to `Data/OpenFootball_2022_2026/` and use headers recognized by the existing Historical CSV importer.
+- Full-time and half-time scores are imported where available. OpenFootball does not supply corners, shots, cards, xG, injuries or lineups; those fields remain unavailable rather than being invented.
+- API-Football remains in place for fixture intelligence, injuries and lineups.
+- After a sync, use Data Library → Import Historical CSV to add the generated CSVs to the existing local SQLite archive. Existing records and prediction history are not deleted.
+- See [Historical Data Sync](docs/HISTORICAL_DATA_SYNC.md) for sources, scope and instructions.
