@@ -139,6 +139,33 @@ class HistoricalCsvImporterTests(unittest.TestCase):
         self.assertEqual(matches[0]["stats_json"]["home_xg"], 1.8)
         self.assertEqual(matches[0]["stats_json"]["away_fouls"], 8)
 
+
+    def test_existing_api_match_is_not_duplicated_or_overwritten(self):
+        path = self.write_csv(
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG,HC,AC\n"
+            "10/08/2025,Arsenal,Chelsea,2,1,7,4\n"
+        )
+        with closing(sqlite3.connect(self.database)) as db:
+            db.execute(
+                """INSERT INTO historical_matches(
+                    fixture_id,league_id,season,competition,country,match_date,status,
+                    home_team_id,home_team,away_team_id,away_team,home_goals,away_goals,
+                    stats_json,payload_json,updated_at_utc
+                ) VALUES(999,39,2025,'Premier League','England','2025-08-10','FT',
+                         1,'Arsenal',2,'Chelsea',2,1,'{"api":"kept"}','{}','now')"""
+            )
+        importer = HistoricalCsvImporter(self.database)
+        result = importer.import_file(path, {
+            "name": "Premier League", "country": "England", "league_id": -45678
+        }, 2025)
+        self.assertEqual(result["stored"], 0)
+        self.assertEqual(result["duplicate_rows"], 1)
+        with closing(sqlite3.connect(self.database)) as db:
+            count = db.execute("SELECT COUNT(*) FROM historical_matches").fetchone()[0]
+            stats = db.execute("SELECT stats_json FROM historical_matches WHERE fixture_id=999").fetchone()[0]
+        self.assertEqual(count, 1)
+        self.assertEqual(stats, '{"api":"kept"}')
+
     def test_windows_1252_team_names_are_supported(self):
         path = self.root / "encoded.csv"
         path.write_bytes(
