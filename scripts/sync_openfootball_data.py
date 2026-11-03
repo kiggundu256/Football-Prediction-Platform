@@ -55,11 +55,16 @@ COLUMNS = [
     "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG",
     "HTHG", "HTAG", "Season", "League", "Country", "Source",
 ]
-DATE_LINE = re.compile(r"^\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+([A-Z][a-z]{2})\s+(\d{1,2})\s*$")
+DATE_LINE = re.compile(r"^\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+([A-Z][a-z]{2})\s+(\d{1,2})(?:\s+(\d{4}))?\s*$")
 MATCH_LINE = re.compile(
     r"^\s*(?:(\d{1,2}:\d{2})\s+)?(.+?)\s+(\d{1,2})-(\d{1,2})"
     r"(?:\s+\((\d{1,2})-(\d{1,2})\))?\s+(.+?)\s*$"
 )
+MATCH_LINE_V = re.compile(
+    r"^\s*(?:(\d{1,2}:\d{2})\s+)?(.+?)\s+v\s+(.+?)\s+"
+    r"(\d{1,2})-(\d{1,2})(?:\s+\((\d{1,2})-(\d{1,2})\))?\s*$"
+)
+
 MONTHS = {name: number for number, name in enumerate(
     ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), start=1
