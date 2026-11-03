@@ -1729,6 +1729,16 @@ class MainWindow(QMainWindow):
         try:
             home_recent = self.historical_db.team_recent_matches(home_id, fixture_date, limit=5)
             away_recent = self.historical_db.team_recent_matches(away_id, fixture_date, limit=5)
+            # CSV-imported teams have generated local IDs, not API-Football IDs.
+            # Fall back to normalized team-name matching so the archive feeds analysis.
+            if not home_recent:
+                home_recent = self.historical_db.team_recent_matches_by_name(
+                    home_name, fixture_date, limit=5, provider_team_id=home_id
+                )
+            if not away_recent:
+                away_recent = self.historical_db.team_recent_matches_by_name(
+                    away_name, fixture_date, limit=5, provider_team_id=away_id
+                )
             if not home_recent or not away_recent:
                 if not key:
                     raise ApiFootballError(
@@ -1755,6 +1765,10 @@ class MainWindow(QMainWindow):
             h2h_matches = self.historical_db.head_to_head_matches(
                 home_id, away_id, fixture_date, limit=10
             )
+            if not h2h_matches:
+                h2h_matches = self.historical_db.head_to_head_matches_by_name(
+                    home_name, away_name, fixture_date, limit=10
+                )
             if not h2h_matches and key:
                 try:
                     h2h_matches = self.cached_provider_data(
