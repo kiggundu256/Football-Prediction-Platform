@@ -11,9 +11,9 @@ ALIASES = {
     "date": ("date", "match_date", "fixture_date", "kickoff", "datetime"),
     "home": ("hometeam", "home_team", "hometeamname", "home", "team_home"),
     "away": ("awayteam", "away_team", "awayteamname", "away", "team_away"),
-    "hg": ("fthg", "home_score", "home_goals", "goals_home", "full_time_home_goals"),
-    "ag": ("ftag", "away_score", "away_goals", "goals_away", "full_time_away_goals"),
-    "result": ("ftr", "result", "full_time_result", "match_result"),
+    "hg": ("fthg", "hg", "home_score", "home_goals", "goals_home", "full_time_home_goals"),
+    "ag": ("ftag", "ag", "away_score", "away_goals", "goals_away", "full_time_away_goals"),
+    "result": ("ftr", "res", "result", "full_time_result", "match_result"),
     "home_corners": ("hc", "home_corners", "corners_home"),
     "away_corners": ("ac", "away_corners", "corners_away"),
     "home_yellow": ("hy", "home_yellow_cards", "yellow_cards_home"),
@@ -70,7 +70,7 @@ def _stable_id(value):
 
 
 def _read_rows(path):
-    raw = Path(path).read_text(encoding="utf-8-sig")
+    try:\n        raw = Path(path).read_text(encoding="utf-8-sig")\n    except UnicodeDecodeError:\n        # Football-Data archives may contain Windows-1252 team/referee names.\n        raw = Path(path).read_text(encoding="cp1252")
     if not raw.strip():
         raise ValueError("The selected CSV file is empty.")
     try:
