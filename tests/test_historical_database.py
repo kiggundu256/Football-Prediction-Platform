@@ -68,6 +68,46 @@ class HistoricalDatabaseTests(unittest.TestCase):
         stats = self.db.stats()
         self.assertEqual(stats["with_statistics"], 1)
 
+    def test_imported_csv_history_can_be_found_by_team_name(self):
+        from csv_historical_importer import HistoricalCsvImporter
+        path = Path(self.temp.name) / "history.csv"
+        path.write_text(
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG\\n"
+            "10/08/2025,Arsenal,Chelsea,2,1\\n"
+            "17/08/2025,Tottenham,Arsenal,0,1\\n",
+            encoding="utf-8",
+        )
+        importer = HistoricalCsvImporter(self.db.path)
+        importer.import_file(path, {
+            "name": "Premier League", "country": "England", "league_id": -39
+        }, 2025)
+
+        recent = self.db.team_recent_matches_by_name(
+            "Arsenal", "2025-09-01", limit=5, provider_team_id=42
+        )
+        self.assertEqual(len(recent), 2)
+        self.assertEqual(recent[0]["teams"]["away"]["id"], 42)
+        self.assertEqual(recent[1]["teams"]["home"]["id"], 42)
+
+    def test_imported_csv_head_to_head_can_be_found_by_team_names(self):
+        from csv_historical_importer import HistoricalCsvImporter
+        path = Path(self.temp.name) / "history.csv"
+        path.write_text(
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG\\n"
+            "10/08/2025,Arsenal,Chelsea,2,1\\n"
+            "17/08/2025,Chelsea,Arsenal,0,0\\n",
+            encoding="utf-8",
+        )
+        importer = HistoricalCsvImporter(self.db.path)
+        importer.import_file(path, {
+            "name": "Premier League", "country": "England", "league_id": -39
+        }, 2025)
+
+        rows = self.db.head_to_head_matches_by_name(
+            "Arsenal", "Chelsea", "2025-09-01", limit=10
+        )
+        self.assertEqual(len(rows), 2)
+
     def test_clear_csv_imports_preserves_api_matches(self):
         api_match = fixture(101, "2025-08-10", 10, 20, 2, 1)
         csv_match = fixture(-202, "2022-08-10", -10, -20, 1, 0)
