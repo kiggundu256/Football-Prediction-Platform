@@ -106,7 +106,7 @@ def _read_rows(path):
 
 def _season_start(value, fallback):
     """Convert labels such as 2024/25 or 2024-2025 to their start year."""
-    match = re.search(r"(19|20)\\d{2}", str(value or ""))
+    match = re.search(r"(19|20)\d{2}", str(value or ""))
     return int(match.group(0)) if match else int(fallback)
 
 
