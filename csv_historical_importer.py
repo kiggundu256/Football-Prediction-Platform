@@ -260,7 +260,19 @@ def parse_csv_matches(path, competition, season):
             skipped += 1
             if len(errors) < 8:
                 errors.append(f"Row {line_number}: {exc}")
-    return matches, {"parsed": len(matches), "skipped": skipped, "errors": errors}
+    headers = list(reader.fieldnames or [])
+    mapped_columns = {field: columns[field] for field in ALIASES if field in columns}
+    corner_rows = sum(
+        1 for match in matches
+        if match["stats_json"]
+        and match["stats_json"].get("home_corners") is not None
+        and match["stats_json"].get("away_corners") is not None
+    )
+    return matches, {
+        "parsed": len(matches), "skipped": skipped, "errors": errors,
+        "headers": headers, "mapped_columns": mapped_columns,
+        "corner_rows": corner_rows,
+    }
 
 
 class HistoricalCsvImporter:
@@ -276,9 +288,21 @@ class HistoricalCsvImporter:
                     file_sha256 TEXT NOT NULL, league_id INTEGER NOT NULL,
                     season INTEGER NOT NULL, competition TEXT NOT NULL,
                     imported_rows INTEGER NOT NULL, skipped_rows INTEGER NOT NULL,
-                    imported_at_utc TEXT NOT NULL
+                    imported_at_utc TEXT NOT NULL,
+                    headers_json TEXT, mapped_columns_json TEXT,
+                    parsed_corner_rows INTEGER NOT NULL DEFAULT 0
                 )
             """)
+            existing_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(historical_csv_imports)").fetchall()
+            }
+            for column, definition in {
+                "headers_json": "TEXT",
+                "mapped_columns_json": "TEXT",
+                "parsed_corner_rows": "INTEGER NOT NULL DEFAULT 0",
+            }.items():
+                if column not in existing_columns:
+                    db.execute(f"ALTER TABLE historical_csv_imports ADD COLUMN {column} {definition}")
 
     @contextmanager
     def connect(self):
@@ -296,11 +320,51 @@ class HistoricalCsvImporter:
         with self.connect() as db:
             db.row_factory = self.sqlite3.Row
             rows = db.execute("""
-                SELECT file_name,competition,season,imported_rows,skipped_rows,
-                       imported_at_utc,file_sha256
+                SELECT id,file_name,competition,season,imported_rows,skipped_rows,
+                       imported_at_utc,file_sha256,headers_json,mapped_columns_json,parsed_corner_rows
                 FROM historical_csv_imports ORDER BY id DESC LIMIT ?
             """, (int(limit),)).fetchall()
         return [dict(row) for row in rows]
+
+    def inspect_import(self, file_sha256):
+        """Return saved import metadata and the corner coverage still present in its rows."""
+        with self.connect() as db:
+            db.row_factory = self.sqlite3.Row
+            record = db.execute(
+                "SELECT * FROM historical_csv_imports WHERE file_sha256=? ORDER BY id DESC LIMIT 1",
+                (str(file_sha256),),
+            ).fetchone()
+            if not record:
+                return None
+            record = dict(record)
+            rows = db.execute(
+                "SELECT payload_json,stats_json FROM historical_matches WHERE payload_json LIKE ?",
+                (f"%{record['file_name']}%",),
+            ).fetchall()
+        stored_matches = stored_corner_matches = 0
+        observed_fields = set()
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+                source = payload.get("csv_source") or {}
+                if source.get("original_file") != record["file_name"]:
+                    continue
+                stored_matches += 1
+                stats = json.loads(row["stats_json"] or "{}")
+                observed_fields.update(
+                    key for key, value in stats.items()
+                    if value is not None and key != "corners_by_team"
+                )
+                if stats.get("home_corners") is not None and stats.get("away_corners") is not None:
+                    stored_corner_matches += 1
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+        record["headers"] = json.loads(record.get("headers_json") or "null")
+        record["mapped_columns"] = json.loads(record.get("mapped_columns_json") or "null")
+        record["stored_matches_found"] = stored_matches
+        record["stored_corner_matches"] = stored_corner_matches
+        record["observed_fields"] = sorted(observed_fields)
+        return record
 
     def import_file(self, path, competition, season):
         from datetime import datetime, timezone
@@ -355,10 +419,13 @@ class HistoricalCsvImporter:
             db.execute("""
                 INSERT INTO historical_csv_imports
                     (file_name,file_sha256,league_id,season,competition,imported_rows,
-                     skipped_rows,imported_at_utc) VALUES(?,?,?,?,?,?,?,?)
+                     skipped_rows,imported_at_utc,headers_json,mapped_columns_json,parsed_corner_rows)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """, (Path(path).name, digest, int(competition["league_id"]),
                   min(m["season"] for m in matches), competition["name"],
-                  stored, summary["skipped"], now))
+                  stored, summary["skipped"], now, json.dumps(summary.get("headers", [])),
+                  json.dumps(summary.get("mapped_columns", {})),
+                  int(summary.get("corner_rows", 0))))
         imported_seasons = sorted({m["season"] for m in matches})
         summary.update({"file_name": Path(path).name, "sha256": digest,
                         "competition": competition["name"],
