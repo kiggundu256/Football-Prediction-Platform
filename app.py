@@ -858,7 +858,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Import details unavailable", "The selected import record could not be found.")
             return
         headers = record.get("headers")
-        mapped = record.get("mapped_columns")
+        mapped = record.get("mapped_columns") or {}
         lines = [
             f"File: {record['file_name']}",
             f"Competition: {record['competition']}",
