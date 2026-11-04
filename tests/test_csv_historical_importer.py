@@ -150,8 +150,8 @@ class HistoricalCsvImporterTests(unittest.TestCase):
         nested.mkdir(parents=True)
         path = nested / "E0.csv"
         path.write_text(
-            "Date,HomeTeam,AwayTeam,FTHG,FTAG,HC,AC\\n"
-            "10/08/2024,Arsenal,Chelsea,2,1,6,4\\n",
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG,HC,AC\n"
+            "10/08/2024,Arsenal,Chelsea,2,1,6,4\n",
             encoding="utf-8",
         )
         scanned, errors = scan_csv_folder(self.root)
@@ -161,8 +161,8 @@ class HistoricalCsvImporterTests(unittest.TestCase):
 
     def test_import_source_label_can_disambiguate_same_basename(self):
         path = self.write_csv(
-            "Date,HomeTeam,AwayTeam,FTHG,FTAG,HC,AC\\n"
-            "10/08/2025,Arsenal,Chelsea,2,1,7,4\\n"
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG,HC,AC\n"
+            "10/08/2025,Arsenal,Chelsea,2,1,7,4\n"
         )
         importer = HistoricalCsvImporter(self.database)
         importer.import_file(
