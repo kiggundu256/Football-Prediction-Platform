@@ -58,9 +58,9 @@ class HistoricalCsvImporterTests(unittest.TestCase):
 
     def test_import_details_report_headers_and_corner_coverage(self):
         path = self.write_csv(
-            "Date,HomeTeam,AwayTeam,FTHG,FTAG,HC,AC,Referee\\n"
-            "10/08/2025,Arsenal,Chelsea,2,1,7,4,M Oliver\\n"
-            "11/08/2025,Liverpool,Everton,1,0,,,A Taylor\\n"
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG,HC,AC,Referee\n"
+            "10/08/2025,Arsenal,Chelsea,2,1,7,4,M Oliver\n"
+            "11/08/2025,Liverpool,Everton,1,0,,,A Taylor\n"
         )
         importer = HistoricalCsvImporter(self.database)
         result = importer.import_file(path, COMPETITION, 2025)
