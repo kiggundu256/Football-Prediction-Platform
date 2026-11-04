@@ -71,7 +71,9 @@ class HistoricalDatabaseTests(unittest.TestCase):
     def test_corner_coverage_counts_csv_and_api_corner_statistics(self):
         api_match = fixture(501, "2025-08-10", 10, 20, 2, 1)
         csv_match = fixture(-502, "2024-08-10", -10, -20, 1, 0)
-        csv_match["league"]["id"] = -39\n        csv_match["league"]["season"] = 2024\n        csv_match["league"]["name"] = "Premier League"
+        csv_match["league"]["id"] = -39
+        csv_match["league"]["season"] = 2024
+        csv_match["league"]["name"] = "Premier League"
         self.db.upsert_fixtures([api_match, csv_match])
         self.db.save_corner_statistics(501, {"10": 6, "20": 4})
         self.db.save_corner_statistics(-502, {"-10": 5, "-20": 3})
