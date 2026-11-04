@@ -145,6 +145,39 @@ class HistoricalCsvImporterTests(unittest.TestCase):
         self.assertFalse(errors)
 
 
+    def test_folder_scan_includes_nested_csv_files(self):
+        nested = self.root / "England" / "Premier League" / "2024"
+        nested.mkdir(parents=True)
+        path = nested / "E0.csv"
+        path.write_text(
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG,HC,AC\\n"
+            "10/08/2024,Arsenal,Chelsea,2,1,6,4\\n",
+            encoding="utf-8",
+        )
+        scanned, errors = scan_csv_folder(self.root)
+        self.assertFalse(errors)
+        self.assertEqual(len(scanned), 1)
+        self.assertEqual(Path(scanned[0]["path"]), path)
+
+    def test_import_source_label_can_disambiguate_same_basename(self):
+        path = self.write_csv(
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG,HC,AC\\n"
+            "10/08/2025,Arsenal,Chelsea,2,1,7,4\\n"
+        )
+        importer = HistoricalCsvImporter(self.database)
+        importer.import_file(
+            path, COMPETITION, 2025, source_file_name="E0 (2).csv"
+        )
+        with closing(sqlite3.connect(self.database)) as db:
+            payload = db.execute(
+                "SELECT payload_json FROM historical_matches"
+            ).fetchone()[0]
+            saved_name = db.execute(
+                "SELECT file_name FROM historical_csv_imports"
+            ).fetchone()[0]
+        self.assertEqual(json.loads(payload)["csv_source"]["original_file"], "E0 (2).csv")
+        self.assertEqual(saved_name, "E0 (2).csv")
+
     def test_referee_and_expected_goals_are_retained_when_available(self):
         path = self.write_csv(
             "Date,HomeTeam,AwayTeam,FTHG,FTAG,Referee,HxG,AxG,HF,AF,HC,AC\n"
