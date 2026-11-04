@@ -634,9 +634,15 @@ class MainWindow(QMainWindow):
         self.import_csv_button = QPushButton("Import Historical CSV")
         self.import_csv_button.clicked.connect(self.import_historical_csv)
         actions.addWidget(self.import_csv_button)
-        self.scan_csv_folder_button = QPushButton("Scan Data Folder")
+        self.scan_csv_folder_button = QPushButton("Add Folder + Subfolders")
         self.scan_csv_folder_button.clicked.connect(self.scan_historical_csv_folder)
         actions.addWidget(self.scan_csv_folder_button)
+        self.add_csv_files_button = QPushButton("Add Multiple CSV Files")
+        self.add_csv_files_button.clicked.connect(self.add_historical_csv_files)
+        actions.addWidget(self.add_csv_files_button)
+        self.clear_csv_queue_button = QPushButton("Clear Import Queue")
+        self.clear_csv_queue_button.clicked.connect(self.clear_csv_import_queue)
+        actions.addWidget(self.clear_csv_queue_button)
         self.bulk_import_csv_button = QPushButton("Import Reviewed Files")
         self.bulk_import_csv_button.clicked.connect(self.import_reviewed_csv_files)
         self.bulk_import_csv_button.setEnabled(False)
@@ -990,45 +996,112 @@ class MainWindow(QMainWindow):
             return
         self.import_reviewed_csv_files()
 
+    def _queue_csv_paths(self, paths, source_label):
+        """Append inspected CSV files to the review queue without discarding earlier batches."""
+        existing_paths = set()
+        used_names = set()
+        for row in range(self.csv_folder_preview.rowCount()):
+            file_item = self.csv_folder_preview.item(row, 0)
+            if file_item:
+                existing_paths.add(str(Path(file_item.data(Qt.ItemDataRole.UserRole)).resolve()))
+                used_names.add(file_item.text().casefold())
+        for record in self.csv_importer.history(limit=10000):
+            used_names.add(str(record.get("file_name") or "").casefold())
+
+        added = errors = 0
+        for raw_path in sorted({str(Path(p).resolve()) for p in paths}):
+            if raw_path in existing_paths:
+                continue
+            path = Path(raw_path)
+            if not path.is_file() or path.suffix.casefold() != ".csv":
+                continue
+            try:
+                preview = inspect_csv_file(path)
+                base_name = path.name
+                candidate = base_name
+                stem, suffix = path.stem, path.suffix
+                number = 2
+                while candidate.casefold() in used_names:
+                    candidate = f"{stem} ({number}){suffix}"
+                    number += 1
+                used_names.add(candidate.casefold())
+                preview["display_name"] = candidate
+                preview["source_location"] = str(path.parent)
+                self._append_csv_preview(preview)
+                existing_paths.add(raw_path)
+                added += 1
+            except (OSError, ValueError, csv.Error) as exc:
+                errors += 1
+                self.library_status.setText(f"Could not inspect {path.name}: {exc}")
+
+        queued = self.csv_folder_preview.rowCount()
+        self.bulk_import_csv_button.setEnabled(queued > 0)
+        self.library_status.setText(
+            f"{source_label}: added {added} file(s); {queued} file(s) currently queued."
+            + (f" {errors} file(s) could not be inspected." if errors else "")
+        )
+        if errors:
+            QMessageBox.warning(
+                self, "Some CSV files could not be inspected",
+                f"{errors} file(s) could not be read. The other files remain in the queue."
+            )
+
+    def _append_csv_preview(self, item):
+        row_index = self.csv_folder_preview.rowCount()
+        self.csv_folder_preview.insertRow(row_index)
+        display_name = item.get("display_name") or item["file_name"]
+        location = item.get("source_location") or str(Path(item["path"]).parent)
+        file_item = QTableWidgetItem(display_name)
+        file_item.setToolTip(str(Path(item["path"])))
+        file_item.setData(Qt.ItemDataRole.UserRole, item["path"])
+        file_item.setData(Qt.ItemDataRole.UserRole + 1, display_name)
+        file_item.setFlags(file_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        values = [
+            file_item, QTableWidgetItem(item["competition"]),
+            QTableWidgetItem(item["country"]),
+            QTableWidgetItem(str(item["season"])), QTableWidgetItem(str(item["rows"])),
+            QTableWidgetItem(f"{item['date_from']} to {item['date_to']}"),
+            QTableWidgetItem("Ready for review"),
+        ]
+        for column, cell in enumerate(values):
+            if column not in (1, 2, 3):
+                cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            if column == 0:
+                cell.setToolTip(f"{display_name}\n{location}")
+            self.csv_folder_preview.setItem(row_index, column, cell)
+
+    def add_historical_csv_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select one or more historical CSV files", "",
+            "CSV files (*.csv);;All files (*)"
+        )
+        if not paths:
+            return
+        self._queue_csv_paths(paths, "CSV file selection complete")
+
     def scan_historical_csv_folder(self):
         folder = QFileDialog.getExistingDirectory(
-            self, "Select the folder containing your historical CSV files", ""
+            self, "Select a folder; all nested subfolders will also be scanned", ""
         )
         if not folder:
             return
         self.csv_folder_path = folder
-        self.library_status.setText("Scanning CSV files and reading their league, season and date information...")
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            previews, errors = scan_csv_folder(folder)
-        except Exception as exc:
-            QMessageBox.warning(self, "CSV folder scan", str(exc))
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
-        self.csv_folder_preview.setRowCount(len(previews))
-        for row_index, item in enumerate(previews):
-            file_item = QTableWidgetItem(item["file_name"])
-            file_item.setData(Qt.ItemDataRole.UserRole, item["path"])
-            file_item.setFlags(file_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            values = [
-                file_item, QTableWidgetItem(item["competition"]),
-                QTableWidgetItem(item["country"]),
-                QTableWidgetItem(str(item["season"])), QTableWidgetItem(str(item["rows"])),
-                QTableWidgetItem(f"{item['date_from']} to {item['date_to']}"),
-                QTableWidgetItem("Ready for review"),
-            ]
-            for column, cell in enumerate(values):
-                if column not in (1, 2, 3):
-                    cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self.csv_folder_preview.setItem(row_index, column, cell)
-        self.bulk_import_csv_button.setEnabled(bool(previews))
-        summary = f"Folder scan complete: {len(previews)} CSV files ready for review."
-        if errors:
-            summary += f" {len(errors)} file(s) could not be read: " + " | ".join(errors[:5])
-        self.library_status.setText(summary)
-        if not previews:
-            QMessageBox.information(self, "CSV folder scan", summary)
+        paths = sorted(Path(folder).rglob("*.csv"))
+        self._queue_csv_paths(paths, "Recursive folder scan complete")
+
+    def clear_csv_import_queue(self):
+        if self.csv_folder_preview.rowCount():
+            answer = QMessageBox.question(
+                self, "Clear import queue",
+                "Remove all files from the current review queue? Already imported database records will not be changed.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self.csv_folder_preview.setRowCount(0)
+        self.bulk_import_csv_button.setEnabled(False)
+        self.library_status.setText("Import queue cleared. Your historical database is unchanged.")
 
     def import_reviewed_csv_files(self):
         count = self.csv_folder_preview.rowCount()
@@ -1045,6 +1118,7 @@ class MainWindow(QMainWindow):
             return
         self.bulk_import_csv_button.setEnabled(False)
         self.scan_csv_folder_button.setEnabled(False)
+        self.add_csv_files_button.setEnabled(False)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         succeeded = failed = stored = skipped = duplicates = 0
         errors = []
@@ -1052,7 +1126,10 @@ class MainWindow(QMainWindow):
             for row_index in range(count):
                 file_item = self.csv_folder_preview.item(row_index, 0)
                 path = file_item.data(Qt.ItemDataRole.UserRole)
-                name = file_item.text()
+                name = file_item.data(Qt.ItemDataRole.UserRole + 1) or file_item.text()
+                status_item = self.csv_folder_preview.item(row_index, 6)
+                if status_item and status_item.text().startswith("Imported"):
+                    continue
                 competition_name = self.csv_folder_preview.item(row_index, 1).text().strip()
                 country = self.csv_folder_preview.item(row_index, 2).text().strip()
                 season_text = self.csv_folder_preview.item(row_index, 3).text().strip().upper()
@@ -1071,7 +1148,9 @@ class MainWindow(QMainWindow):
                     self.csv_folder_preview.item(row_index, 6).setText("Importing...")
                     self.library_status.setText(f"Importing {name} ({row_index + 1}/{count})...")
                     QApplication.processEvents()
-                    result = self.csv_importer.import_file(path, competition, fallback_season)
+                    result = self.csv_importer.import_file(
+                        path, competition, fallback_season, source_file_name=name
+                    )
                     succeeded += 1
                     stored += result["stored"]
                     skipped += result["skipped"]
@@ -1088,7 +1167,8 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
             self.scan_csv_folder_button.setEnabled(True)
-            self.bulk_import_csv_button.setEnabled(True)
+            self.add_csv_files_button.setEnabled(True)
+            self.bulk_import_csv_button.setEnabled(self.csv_folder_preview.rowCount() > 0)
         self.refresh_data_library()
         summary = (
             f"Bulk import finished. Files imported: {succeeded}; failed: {failed}; "
