@@ -260,6 +260,44 @@ class HistoricalDatabase:
             )
         return True
 
+    def coverage_summary(self):
+        """Return competition/season coverage across API and CSV historical records."""
+        with self.connect() as db:
+            rows = [dict(row) for row in db.execute("""
+                SELECT league_id,season,competition,country,
+                       COUNT(*) AS match_count,
+                       SUM(CASE WHEN status IN ('FT','AET','PEN') THEN 1 ELSE 0 END) AS completed_count,
+                       SUM(CASE WHEN fixture_id < 0 THEN 1 ELSE 0 END) AS csv_count,
+                       SUM(CASE WHEN fixture_id >= 0 THEN 1 ELSE 0 END) AS api_count,
+                       SUM(CASE WHEN stats_json IS NOT NULL THEN 1 ELSE 0 END) AS with_statistics,
+                       MIN(match_date) AS date_from, MAX(match_date) AS date_to
+                FROM historical_matches
+                GROUP BY league_id,season,competition,country
+                ORDER BY competition,country,season DESC
+            """).fetchall()]
+            team_rows = db.execute("""
+                SELECT league_id,season,competition,country,COUNT(DISTINCT team_name) AS team_count
+                FROM (
+                    SELECT league_id,season,competition,country,home_team AS team_name
+                    FROM historical_matches
+                    UNION ALL
+                    SELECT league_id,season,competition,country,away_team AS team_name
+                    FROM historical_matches
+                )
+                WHERE team_name IS NOT NULL AND TRIM(team_name) <> ''
+                GROUP BY league_id,season,competition,country
+            """).fetchall()
+        team_counts = {
+            (row["league_id"], row["season"], row["competition"], row["country"]): row["team_count"]
+            for row in team_rows
+        }
+        for row in rows:
+            key = (row["league_id"], row["season"], row["competition"], row["country"])
+            row["team_count"] = int(team_counts.get(key, 0))
+            for field in ("match_count", "completed_count", "csv_count", "api_count", "with_statistics"):
+                row[field] = int(row[field] or 0)
+        return rows
+
     def season_summary(self):
         with self.connect() as db:
             return [dict(row) for row in db.execute("""
