@@ -843,7 +843,7 @@ class MainWindow(QMainWindow):
             f"Date range: {record.get('date_from') or '—'} to {record.get('date_to') or '—'}",
             f"Completed matches with both corner totals: {record['corner_matches']:,}",
         ]
-        QMessageBox.information(self, "Competition / season details", "\\n".join(details))
+        QMessageBox.information(self, "Competition / season details", "\n".join(details))
 
     def show_csv_import_details(self, row):
         if row is None or row < 0:
@@ -892,7 +892,7 @@ class MainWindow(QMainWindow):
                 f"Home-corners values found: {'Yes' if 'home_corners' in (record.get('observed_fields') or []) else 'No'}",
                 f"Away-corners values found: {'Yes' if 'away_corners' in (record.get('observed_fields') or []) else 'No'}",
             ])
-        QMessageBox.information(self, "CSV import details", "\\n".join(lines))
+        QMessageBox.information(self, "CSV import details", "\n".join(lines))
 
     def clear_csv_imports(self):
         answer = QMessageBox.question(
