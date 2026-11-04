@@ -682,6 +682,25 @@ class MainWindow(QMainWindow):
         self.library_table.horizontalHeader().setStretchLastSection(True)
         enable_table_copy(self.library_table)
         box.addWidget(self.library_table)
+        coverage_heading = QLabel("IMPORTED MATCH COVERAGE")
+        coverage_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
+        box.addWidget(coverage_heading)
+        coverage_note = QLabel(
+            "Breakdown of the records actually stored in this local database, including CSV/API source, "
+            "season range, completed matches and distinct teams."
+        )
+        coverage_note.setWordWrap(True)
+        box.addWidget(coverage_note)
+        self.coverage_table = QTableWidget(0, 9)
+        self.coverage_table.setHorizontalHeaderLabels([
+            "Competition", "Country", "Season", "Matches", "Completed",
+            "Teams", "CSV", "API", "Date range"
+        ])
+        self.coverage_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.coverage_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.coverage_table.horizontalHeader().setStretchLastSection(True)
+        enable_table_copy(self.coverage_table)
+        box.addWidget(self.coverage_table)
         csv_heading = QLabel("CSV IMPORT HISTORY")
         csv_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
         box.addWidget(csv_heading)
@@ -706,6 +725,17 @@ class MainWindow(QMainWindow):
             f"Competitions: {stats['competitions']}  •  Competition-seasons: {stats['competition_seasons']}  •  "
             f"Matches with saved statistics: {stats['with_statistics']:,}"
         )
+        coverage = self.historical_db.coverage_summary()
+        self.coverage_table.setRowCount(len(coverage))
+        for row_index, record in enumerate(coverage):
+            values = [
+                record["competition"], record["country"] or "—", record["season"],
+                record["match_count"], record["completed_count"], record["team_count"],
+                record["csv_count"], record["api_count"],
+                f"{record['date_from']} → {record['date_to']}",
+            ]
+            for column, value in enumerate(values):
+                self.coverage_table.setItem(row_index, column, QTableWidgetItem(str(value)))
         rows = self.historical_db.season_summary()
         self.library_table.setRowCount(len(rows))
         for row_index, record in enumerate(rows):
