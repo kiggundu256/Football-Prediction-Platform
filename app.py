@@ -1937,6 +1937,11 @@ class MainWindow(QMainWindow):
 
         home_used = matches_used(home_recent, home_id)
         away_used = matches_used(away_recent, away_id)
+        selected_fixture_data = item.get("fixture") or {}
+        selected_fixture_id = selected_fixture_data.get("id")
+        corner_averages = self.store.get_provider_cache(
+            f"corner_averages:{selected_fixture_id}", 30 * 24 * 60 * 60
+        )
 
         # Build corner averages from local CSV/API history automatically; do not
         # require a separate intelligence-button action when sufficient data exists.
@@ -1957,7 +1962,7 @@ class MainWindow(QMainWindow):
 
         home_for, home_against = observed_corner_rates(home_used, home_name)
         away_for, away_against = observed_corner_rates(away_used, away_name)
-        if min(len(home_for), len(away_for)) >= 2:
+        if not corner_averages and min(len(home_for), len(away_for)) >= 2:
             corner_averages = {
                 "home_for": sum(home_for) / len(home_for),
                 "home_against": sum(home_against) / len(home_against),
@@ -1982,11 +1987,6 @@ class MainWindow(QMainWindow):
         model_features = build_model_features(hr, ar, home_xg_seed, away_xg_seed)
         local_ml = train_outcome_model(self.store.training_records())
         ml_probabilities = predict_outcome(local_ml, model_features) if local_ml else None
-        selected_fixture_data = item.get("fixture") or {}
-        selected_fixture_id = selected_fixture_data.get("id")
-        corner_averages = self.store.get_provider_cache(
-            f"corner_averages:{selected_fixture_id}", 30 * 24 * 60 * 60
-        )
         injuries_data = self.store.get_provider_cache(f"injuries:{selected_fixture_id}", 30 * 60)
         lineups_data = self.store.get_provider_cache(f"lineups:{selected_fixture_id}", 10 * 60)
         weather_data = None
