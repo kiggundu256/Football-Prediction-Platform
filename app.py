@@ -725,6 +725,9 @@ class MainWindow(QMainWindow):
         )
         coverage_actions.addWidget(self.view_coverage_details_button)
         box.addLayout(coverage_actions)
+        self.coverage_table.cellClicked.connect(
+            lambda row, column: self.show_coverage_details(row)
+        )
         csv_heading = QLabel("CSV IMPORT HISTORY")
         csv_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
         box.addWidget(csv_heading)
@@ -753,6 +756,20 @@ class MainWindow(QMainWindow):
         )
         csv_actions.addWidget(self.view_csv_details_button)
         box.addLayout(csv_actions)
+        self.csv_import_history_table.cellClicked.connect(
+            lambda row, column: self.show_csv_import_details(row)
+        )
+        self.library_detail_panel = QLabel(
+            "DATA INSPECTION\nSelect a row in Imported Match Coverage or CSV Import History "
+            "to see its details here. You no longer need to double-click or use a separate button."
+        )
+        self.library_detail_panel.setWordWrap(True)
+        self.library_detail_panel.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.library_detail_panel.setStyleSheet(
+            "background:#101B2B;color:#D8E5F7;border:1px solid #26364D;"
+            "border-radius:8px;padding:10px;margin-top:6px"
+        )
+        box.addWidget(self.library_detail_panel)
         self.refresh_data_library()
 
         scroll = QScrollArea()
@@ -843,7 +860,8 @@ class MainWindow(QMainWindow):
             f"Date range: {record.get('date_from') or '—'} to {record.get('date_to') or '—'}",
             f"Completed matches with both corner totals: {record['corner_matches']:,}",
         ]
-        QMessageBox.information(self, "Competition / season details", "\n".join(details))
+        if hasattr(self, "library_detail_panel"):
+            self.library_detail_panel.setText("COMPETITION / SEASON DETAILS\n" + "\n".join(details))
 
     def show_csv_import_details(self, row):
         if row is None or row < 0:
@@ -892,7 +910,8 @@ class MainWindow(QMainWindow):
                 f"Home-corners values found: {'Yes' if 'home_corners' in (record.get('observed_fields') or []) else 'No'}",
                 f"Away-corners values found: {'Yes' if 'away_corners' in (record.get('observed_fields') or []) else 'No'}",
             ])
-        QMessageBox.information(self, "CSV import details", "\n".join(lines))
+        if hasattr(self, "library_detail_panel"):
+            self.library_detail_panel.setText("CSV IMPORT DETAILS\n" + "\n".join(lines))
 
     def clear_csv_imports(self):
         answer = QMessageBox.question(
