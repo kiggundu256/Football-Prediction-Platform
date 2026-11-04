@@ -593,6 +593,8 @@ class MainWindow(QMainWindow):
         )
 
     def data_library_page(self):
+        # Keep the full Data Library navigable while giving long tables their
+        # own bounded viewport and scrollbars.
         page = QWidget()
         box = QVBoxLayout(page)
         heading = QLabel("HISTORICAL FOOTBALL DATABASE")
@@ -663,7 +665,10 @@ class MainWindow(QMainWindow):
                                                  QTableWidget.EditTrigger.EditKeyPressed)
         self.csv_folder_preview.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.csv_folder_preview.horizontalHeader().setStretchLastSection(True)
-        self.csv_folder_preview.setMinimumHeight(190)
+        self.csv_folder_preview.setMinimumHeight(150)
+        self.csv_folder_preview.setMaximumHeight(230)
+        self.csv_folder_preview.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.csv_folder_preview.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         enable_table_copy(self.csv_folder_preview)
         box.addWidget(self.csv_folder_preview)
         self.csv_folder_path = ""
@@ -680,6 +685,10 @@ class MainWindow(QMainWindow):
         self.library_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.library_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.library_table.horizontalHeader().setStretchLastSection(True)
+        self.library_table.setMinimumHeight(150)
+        self.library_table.setMaximumHeight(250)
+        self.library_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.library_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         enable_table_copy(self.library_table)
         box.addWidget(self.library_table)
         coverage_heading = QLabel("IMPORTED MATCH COVERAGE")
@@ -699,6 +708,10 @@ class MainWindow(QMainWindow):
         self.coverage_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.coverage_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.coverage_table.horizontalHeader().setStretchLastSection(True)
+        self.coverage_table.setMinimumHeight(170)
+        self.coverage_table.setMaximumHeight(280)
+        self.coverage_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.coverage_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         enable_table_copy(self.coverage_table)
         box.addWidget(self.coverage_table)
         csv_heading = QLabel("CSV IMPORT HISTORY")
@@ -711,10 +724,21 @@ class MainWindow(QMainWindow):
         self.csv_import_history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.csv_import_history_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.csv_import_history_table.horizontalHeader().setStretchLastSection(True)
+        self.csv_import_history_table.setMinimumHeight(150)
+        self.csv_import_history_table.setMaximumHeight(250)
+        self.csv_import_history_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.csv_import_history_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         enable_table_copy(self.csv_import_history_table)
         box.addWidget(self.csv_import_history_table)
         self.refresh_data_library()
-        return page
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(page)
+        return scroll
 
     def refresh_data_library(self):
         if not hasattr(self, "library_table"):
