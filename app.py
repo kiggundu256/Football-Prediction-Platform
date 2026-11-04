@@ -330,7 +330,6 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self.dashboard(), "Dashboard")
         self.tabs.addTab(self.live_fixtures_page(), "Live Fixtures")
-        self.tabs.addTab(self.analysis(), "Match Analysis")
         self.tabs.addTab(self.history_page(), "Prediction History")
         self.tabs.addTab(self.performance(), "Performance Lab")
         self.tabs.addTab(self.data_library_page(), "Data Library")
@@ -1141,7 +1140,7 @@ class MainWindow(QMainWindow):
         quick_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
         box.addWidget(quick_heading)
         actions = QHBoxLayout()
-        for label, index in (("Load Fixtures", 1), ("Match Analysis", 2),
+        for label, index in (("Load Fixtures", 1), ("Analyze Fixtures", 1),
                              ("Prediction History", 3), ("Performance Lab", 4)):
             button = QPushButton(label)
             button.clicked.connect(lambda checked=False, tab=index: self.tabs.setCurrentIndex(tab))
