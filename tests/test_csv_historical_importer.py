@@ -58,8 +58,8 @@ class HistoricalCsvImporterTests(unittest.TestCase):
 
     def test_history_count_and_pagination_return_all_import_records(self):
         path = self.write_csv(
-            "Date,HomeTeam,AwayTeam,FTHG,FTAG\\n"
-            "10/08/2025,Arsenal,Chelsea,2,1\\n"
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG\n"
+            "10/08/2025,Arsenal,Chelsea,2,1\n"
         )
         importer = HistoricalCsvImporter(self.database)
         importer.import_file(path, COMPETITION, 2025)
