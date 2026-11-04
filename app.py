@@ -1872,16 +1872,26 @@ class MainWindow(QMainWindow):
         try:
             home_recent = self.historical_db.team_recent_matches(home_id, fixture_date, limit=5)
             away_recent = self.historical_db.team_recent_matches(away_id, fixture_date, limit=5)
-            # CSV-imported teams have generated local IDs, not API-Football IDs.
-            # Fall back to normalized team-name matching so the archive feeds analysis.
-            if not home_recent:
-                home_recent = self.historical_db.team_recent_matches_by_name(
-                    home_name, fixture_date, limit=5, provider_team_id=home_id
+            # Merge name-matched CSV history even when API-ID history exists, so
+            # imported statistics (especially corners) remain available to models.
+            for team_name, team_id, history in (
+                (home_name, home_id, home_recent), (away_name, away_id, away_recent)
+            ):
+                imported = self.historical_db.team_recent_matches_by_name(
+                    team_name, fixture_date, limit=10, provider_team_id=team_id
                 )
-            if not away_recent:
-                away_recent = self.historical_db.team_recent_matches_by_name(
-                    away_name, fixture_date, limit=5, provider_team_id=away_id
-                )
+                combined = {(match.get("fixture") or {}).get("id"): match for match in history}
+                for match in imported:
+                    combined.setdefault((match.get("fixture") or {}).get("id"), match)
+                merged = sorted(
+                    combined.values(),
+                    key=lambda match: (match.get("fixture") or {}).get("date", ""),
+                    reverse=True,
+                )[:10]
+                if team_name == home_name:
+                    home_recent = merged
+                else:
+                    away_recent = merged
             if not home_recent or not away_recent:
                 if not key:
                     raise ApiFootballError(
