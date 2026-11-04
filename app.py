@@ -1,4 +1,5 @@
 """Football Prediction Platform desktop app."""
+import csv
 import json
 import os
 import sqlite3
@@ -34,7 +35,7 @@ from settlement import settle_markets
 from performance_metrics import summarize_performance
 from fixture_view import filter_fixtures, competition_options, fixture_status_group
 from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
-from csv_historical_importer import HistoricalCsvImporter, scan_csv_folder, _stable_id, _season_start
+from csv_historical_importer import (HistoricalCsvImporter, scan_csv_folder, inspect_csv_file, _stable_id, _season_start)
 from historical_reconciliation import HistoricalReconciliation
 from player_intelligence import PlayerIntelligenceDatabase
 
