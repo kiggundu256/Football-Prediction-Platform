@@ -735,9 +735,14 @@ class MainWindow(QMainWindow):
         self.coverage_table.cellClicked.connect(
             lambda row, column: self.show_coverage_details(row)
         )
+        self.csv_history_page = 0
+        self.csv_history_page_size = 100
         csv_heading = QLabel("CSV IMPORT HISTORY")
         csv_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
         box.addWidget(csv_heading)
+        self.csv_history_total_label = QLabel("CSV import records: loading…")
+        self.csv_history_total_label.setStyleSheet("color:#D8E5F7;font-weight:600;padding:3px")
+        box.addWidget(self.csv_history_total_label)
         self.csv_import_history_table = QTableWidget(0, 6)
         self.csv_import_history_table.setHorizontalHeaderLabels([
             "File", "Competition", "Season", "Imported", "Skipped", "Imported (UTC)"
@@ -754,6 +759,21 @@ class MainWindow(QMainWindow):
             lambda row, column: self.show_csv_import_details(row)
         )
         box.addWidget(self.csv_import_history_table)
+        csv_page_actions = QHBoxLayout()
+        self.csv_history_page_label = QLabel("Page 1")
+        self.csv_history_previous_button = QPushButton("Previous 100")
+        self.csv_history_previous_button.clicked.connect(
+            lambda: self.change_csv_history_page(-1)
+        )
+        self.csv_history_next_button = QPushButton("Next 100")
+        self.csv_history_next_button.clicked.connect(
+            lambda: self.change_csv_history_page(1)
+        )
+        csv_page_actions.addWidget(self.csv_history_previous_button)
+        csv_page_actions.addWidget(self.csv_history_page_label)
+        csv_page_actions.addWidget(self.csv_history_next_button)
+        csv_page_actions.addStretch()
+        box.addLayout(csv_page_actions)
         csv_actions = QHBoxLayout()
         csv_actions.addWidget(QLabel("Double-click an imported file or select it and view details."))
         csv_actions.addStretch()
@@ -833,7 +853,23 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 self.library_table.setItem(row_index, column, QTableWidgetItem(str(value)))
         if hasattr(self, "csv_import_history_table"):
-            imports = self.csv_importer.history()
+            total_imports = self.csv_importer.history_count()
+            page_size = self.csv_history_page_size
+            total_pages = max(1, (total_imports + page_size - 1) // page_size)
+            self.csv_history_page = min(max(0, self.csv_history_page), total_pages - 1)
+            offset = self.csv_history_page * page_size
+            imports = self.csv_importer.history(limit=page_size, offset=offset)
+            first_record = offset + 1 if total_imports else 0
+            last_record = min(offset + len(imports), total_imports)
+            self.csv_history_total_label.setText(
+                f"Total CSV import records: {total_imports:,}"
+            )
+            self.csv_history_page_label.setText(
+                f"Showing {first_record:,}–{last_record:,} of {total_imports:,}  •  "
+                f"Page {self.csv_history_page + 1} of {total_pages}"
+            )
+            self.csv_history_previous_button.setEnabled(self.csv_history_page > 0)
+            self.csv_history_next_button.setEnabled(self.csv_history_page < total_pages - 1)
             self.csv_import_history_table.setRowCount(len(imports))
             for row_index, record in enumerate(imports):
                 values = [
@@ -846,6 +882,16 @@ class MainWindow(QMainWindow):
                     if column == 0:
                         item.setData(Qt.ItemDataRole.UserRole, record.get("file_sha256"))
                     self.csv_import_history_table.setItem(row_index, column, item)
+
+    def change_csv_history_page(self, direction):
+        """Move through the complete CSV import history in pages."""
+        total = self.csv_importer.history_count()
+        page_size = self.csv_history_page_size
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        self.csv_history_page = min(
+            max(0, self.csv_history_page + int(direction)), total_pages - 1
+        )
+        self.refresh_data_library()
 
     def show_coverage_details(self, row):
         if row is None or row < 0:
