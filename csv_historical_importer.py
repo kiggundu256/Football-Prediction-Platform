@@ -194,7 +194,7 @@ def inspect_csv_file(path):
 def scan_csv_folder(folder):
     """Inspect CSV files in a folder and return previews plus per-file errors."""
     previews, errors = [], []
-    for path in sorted(Path(folder).glob("*.csv")):
+    for path in sorted(Path(folder).rglob("*.csv")):
         try:
             previews.append(inspect_csv_file(path))
         except (OSError, ValueError, csv.Error) as exc:
@@ -202,7 +202,7 @@ def scan_csv_folder(folder):
     return previews, errors
 
 
-def parse_csv_matches(path, competition, season):
+def parse_csv_matches(path, competition, season, source_file_name=None):
     reader, columns = _read_rows(path)
     matches, skipped, errors = [], 0, []
     competition_id = int(competition["league_id"])
@@ -244,7 +244,7 @@ def parse_csv_matches(path, competition, season):
                 "teams": {"home": {"id": home_id, "name": home}, "away": {"id": away_id, "name": away}},
                 "goals": {"home": int(hg), "away": int(ag)},
                 "score": {"fulltime": {"home": int(hg), "away": int(ag)}},
-                "csv_source": {"provider": "csv", "original_file": Path(path).name,
+                "csv_source": {"provider": "csv", "original_file": source_file_name or Path(path).name,
                                "result": result,
                                "referee": str(row.get(columns.get("referee", "")) or "").strip() or None,
                                "statistics": stats},
@@ -366,9 +366,12 @@ class HistoricalCsvImporter:
         record["observed_fields"] = sorted(observed_fields)
         return record
 
-    def import_file(self, path, competition, season):
+    def import_file(self, path, competition, season, source_file_name=None):
         from datetime import datetime, timezone
-        matches, summary = parse_csv_matches(path, competition, season)
+        source_file_name = source_file_name or Path(path).name
+        matches, summary = parse_csv_matches(
+            path, competition, season, source_file_name=source_file_name
+        )
         if not matches:
             detail = " ".join(summary["errors"])
             raise ValueError("No valid matches were found. " + detail)
@@ -421,13 +424,13 @@ class HistoricalCsvImporter:
                     (file_name,file_sha256,league_id,season,competition,imported_rows,
                      skipped_rows,imported_at_utc,headers_json,mapped_columns_json,parsed_corner_rows)
                     VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            """, (Path(path).name, digest, int(competition["league_id"]),
+            """, (source_file_name, digest, int(competition["league_id"]),
                   min(m["season"] for m in matches), competition["name"],
                   stored, summary["skipped"], now, json.dumps(summary.get("headers", [])),
                   json.dumps(summary.get("mapped_columns", {})),
                   int(summary.get("corner_rows", 0))))
         imported_seasons = sorted({m["season"] for m in matches})
-        summary.update({"file_name": Path(path).name, "sha256": digest,
+        summary.update({"file_name": source_file_name, "sha256": digest,
                         "competition": competition["name"],
                         "season": imported_seasons[0] if len(imported_seasons) == 1 else "multiple",
                         "seasons": imported_seasons, "stored": stored,
