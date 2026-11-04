@@ -1798,7 +1798,7 @@ class MainWindow(QMainWindow):
         for record in injuries or []:
             player = record.get("player") or {}
             team = record.get("team") or {}
-            reason = record.get("reason") or record.get("type") or "Unavailable"
+            reason = player.get("reason") or player.get("type") or record.get("reason") or record.get("type") or "Unavailable"
             name = player.get("name") or "Player not identified"
             injury_items.append(f"{name} — {reason}" + (f" ({team.get('name')})" if team.get("name") else ""))
         lineup_items = []
