@@ -316,14 +316,21 @@ class HistoricalCsvImporter:
         finally:
             db.close()
 
-    def history(self, limit=100):
+    def history_count(self):
+        """Return the total number of CSV import history records."""
+        with self.connect() as db:
+            row = db.execute("SELECT COUNT(*) FROM historical_csv_imports").fetchone()
+        return int(row[0] or 0)
+
+    def history(self, limit=100, offset=0):
+        """Return one page of CSV import history, newest imports first."""
         with self.connect() as db:
             db.row_factory = self.sqlite3.Row
             rows = db.execute("""
                 SELECT id,file_name,competition,season,imported_rows,skipped_rows,
                        imported_at_utc,file_sha256,headers_json,mapped_columns_json,parsed_corner_rows
-                FROM historical_csv_imports ORDER BY id DESC LIMIT ?
-            """, (int(limit),)).fetchall()
+                FROM historical_csv_imports ORDER BY id DESC LIMIT ? OFFSET ?
+            """, (max(1, int(limit)), max(0, int(offset)))).fetchall()
         return [dict(row) for row in rows]
 
     def inspect_import(self, file_sha256):
