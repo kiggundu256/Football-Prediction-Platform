@@ -136,6 +136,30 @@ class HistoricalDatabaseTests(unittest.TestCase):
         self.assertEqual(ids, [101])
         self.assertEqual(self.db.stats()["matches"], 1)
 
+    def test_coverage_summary_reports_csv_api_counts_teams_and_dates(self):
+        csv_one = fixture(-201, "2022-08-10", -10, -20, 2, 1)
+        csv_one["league"]["id"] = -39
+        csv_one["league"]["name"] = "Premier League"
+        csv_two = fixture(-202, "2023-08-12", -20, -30, 0, 0)
+        csv_two["league"]["id"] = -39
+        csv_two["league"]["name"] = "Premier League"
+        api_match = fixture(301, "2024-08-15", 40, 50, 1, 0)
+        self.db.upsert_fixtures([csv_one, csv_two, api_match])
+
+        rows = self.db.coverage_summary()
+        csv_row = next(row for row in rows if row["league_id"] == -39)
+        api_row = next(row for row in rows if row["league_id"] == 39)
+
+        self.assertEqual(csv_row["match_count"], 2)
+        self.assertEqual(csv_row["completed_count"], 2)
+        self.assertEqual(csv_row["csv_count"], 2)
+        self.assertEqual(csv_row["api_count"], 0)
+        self.assertEqual(csv_row["team_count"], 3)
+        self.assertEqual(csv_row["date_from"], "2022-08-10")
+        self.assertEqual(csv_row["date_to"], "2023-08-12")
+        self.assertEqual(api_row["api_count"], 1)
+        self.assertEqual(api_row["csv_count"], 0)
+
     def test_sync_history_and_season_summary(self):
         competition = {"name": "Premier League", "country": "England", "league_id": 39}
         self.db.record_sync(competition, 2025, 380, 380)
