@@ -68,6 +68,23 @@ class HistoricalDatabaseTests(unittest.TestCase):
         stats = self.db.stats()
         self.assertEqual(stats["with_statistics"], 1)
 
+    def test_corner_coverage_counts_csv_and_api_corner_statistics(self):
+        api_match = fixture(501, "2025-08-10", 10, 20, 2, 1)
+        csv_match = fixture(-502, "2024-08-10", -10, -20, 1, 0)
+        csv_match["league"]["id"] = -39\n        csv_match["league"]["season"] = 2024\n        csv_match["league"]["name"] = "Premier League"
+        self.db.upsert_fixtures([api_match, csv_match])
+        self.db.save_corner_statistics(501, {"10": 6, "20": 4})
+        self.db.save_corner_statistics(-502, {"-10": 5, "-20": 3})
+        self.assertEqual(self.db.corner_counts(501), {"home": 6.0, "away": 4.0})
+        self.assertEqual(self.db.corner_counts(-502), {"home": 5.0, "away": 3.0})
+        summary = self.db.corner_coverage_summary()
+        self.assertEqual(summary["completed_with_corners"], 2)
+        self.assertEqual(
+            {(row["competition"], row["season"], row["matches"])
+             for row in summary["by_competition"]},
+            {("Premier League", 2025, 1), ("Premier League", 2024, 1)}
+        )
+
     def test_imported_csv_history_can_be_found_by_team_name(self):
         from csv_historical_importer import HistoricalCsvImporter
         path = Path(self.temp.name) / "history.csv"
