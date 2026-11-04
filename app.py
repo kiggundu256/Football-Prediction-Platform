@@ -1938,6 +1938,34 @@ class MainWindow(QMainWindow):
         home_used = matches_used(home_recent, home_id)
         away_used = matches_used(away_recent, away_id)
 
+        # Build corner averages from local CSV/API history automatically; do not
+        # require a separate intelligence-button action when sufficient data exists.
+        def observed_corner_rates(matches, team_name):
+            own, against = [], []
+            target = self.historical_db._team_name_key(team_name)
+            for historical_match in matches:
+                historical_fixture_id = (historical_match.get("fixture") or {}).get("id")
+                counts = self.historical_db.corner_counts(historical_fixture_id) if historical_fixture_id else None
+                if not counts:
+                    continue
+                match_teams = historical_match.get("teams") or {}
+                historical_home = match_teams.get("home") or {}
+                is_home = self.historical_db._team_name_key(historical_home.get("name")) == target
+                own.append(counts["home"] if is_home else counts["away"])
+                against.append(counts["away"] if is_home else counts["home"])
+            return own, against
+
+        home_for, home_against = observed_corner_rates(home_used, home_name)
+        away_for, away_against = observed_corner_rates(away_used, away_name)
+        if min(len(home_for), len(away_for)) >= 2:
+            corner_averages = {
+                "home_for": sum(home_for) / len(home_for),
+                "home_against": sum(home_against) / len(home_against),
+                "away_for": sum(away_for) / len(away_for),
+                "away_against": sum(away_against) / len(away_against),
+            }
+            self.store.save_provider_cache(f"corner_averages:{selected_fixture_id}", corner_averages)
+
         hr = team_profile(home_used, home_id)
         ar = team_profile(away_used, away_id)
         if not hr or not ar:
