@@ -56,6 +56,18 @@ class HistoricalCsvImporterTests(unittest.TestCase):
             self.assertEqual(json.loads(payload)["csv_source"]["provider"], "csv")
             self.assertEqual(db.execute("SELECT COUNT(*) FROM historical_csv_imports").fetchone()[0], 2)
 
+    def test_history_count_and_pagination_return_all_import_records(self):
+        path = self.write_csv(
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG\\n"
+            "10/08/2025,Arsenal,Chelsea,2,1\\n"
+        )
+        importer = HistoricalCsvImporter(self.database)
+        importer.import_file(path, COMPETITION, 2025)
+        importer.import_file(path, COMPETITION, 2025)
+        self.assertEqual(importer.history_count(), 2)
+        self.assertEqual(len(importer.history(limit=1, offset=0)), 1)
+        self.assertEqual(len(importer.history(limit=1, offset=1)), 1)
+
     def test_import_details_report_headers_and_corner_coverage(self):
         path = self.write_csv(
             "Date,HomeTeam,AwayTeam,FTHG,FTAG,HC,AC,Referee\n"
