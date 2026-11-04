@@ -56,6 +56,23 @@ class HistoricalCsvImporterTests(unittest.TestCase):
             self.assertEqual(json.loads(payload)["csv_source"]["provider"], "csv")
             self.assertEqual(db.execute("SELECT COUNT(*) FROM historical_csv_imports").fetchone()[0], 2)
 
+    def test_import_details_report_headers_and_corner_coverage(self):
+        path = self.write_csv(
+            "Date,HomeTeam,AwayTeam,FTHG,FTAG,HC,AC,Referee\\n"
+            "10/08/2025,Arsenal,Chelsea,2,1,7,4,M Oliver\\n"
+            "11/08/2025,Liverpool,Everton,1,0,,,A Taylor\\n"
+        )
+        importer = HistoricalCsvImporter(self.database)
+        result = importer.import_file(path, COMPETITION, 2025)
+        details = importer.inspect_import(result["sha256"])
+        self.assertIn("HC", details["headers"])
+        self.assertIn("AC", details["headers"])
+        self.assertEqual(details["mapped_columns"]["home_corners"], "HC")
+        self.assertEqual(details["mapped_columns"]["away_corners"], "AC")
+        self.assertEqual(details["parsed_corner_rows"], 1)
+        self.assertEqual(details["stored_matches_found"], 2)
+        self.assertEqual(details["stored_corner_matches"], 1)
+
     def test_bad_rows_are_skipped_with_line_errors(self):
         path = self.write_csv(
             "Date,HomeTeam,AwayTeam,FTHG,FTAG\n"
