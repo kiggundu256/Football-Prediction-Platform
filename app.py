@@ -1719,10 +1719,19 @@ class MainWindow(QMainWindow):
                 recent[side] = self.historical_db.team_recent_matches(
                     team_id, match_date, limit=5
                 )
-                if not recent[side] and team_name:
-                    recent[side] = self.historical_db.team_recent_matches_by_name(
-                        team_name, match_date, limit=5, provider_team_id=team_id
+                if team_name:
+                    imported = self.historical_db.team_recent_matches_by_name(
+                        team_name, match_date, limit=10, provider_team_id=team_id
                     )
+                    combined = {((match.get("fixture") or {}).get("id")): match
+                                for match in recent[side]}
+                    for match in imported:
+                        combined.setdefault((match.get("fixture") or {}).get("id"), match)
+                    recent[side] = sorted(
+                        combined.values(),
+                        key=lambda match: (match.get("fixture") or {}).get("date", ""),
+                        reverse=True,
+                    )[:10]
                 if not recent[side]:
                     recent[side] = optional_data(
                         f"{side.title()} history", f"team_recent:{team_id}:{match_date}:5",
@@ -1739,18 +1748,18 @@ class MainWindow(QMainWindow):
                 ("home", home_id, recent.get("home", [])),
                 ("away", away_id, recent.get("away", [])),
             ):
-                for old_match in fixtures[:3]:
-                    if quota_exhausted:
+                for old_match in fixtures:
+                    if len(corner_data[f"{side}_for"]) >= 3:
                         break
                     old_fixture = old_match.get("fixture") or {}
                     old_id = old_fixture.get("id")
                     old_teams = old_match.get("teams") or {}
                     old_home, old_away = old_teams.get("home") or {}, old_teams.get("away") or {}
                     opponent_id = old_away.get("id") if old_home.get("id") == team_id else old_home.get("id")
-                    if not old_id or not opponent_id:
+                    if not old_id:
                         continue
-                    counts = self.historical_db.corner_counts(old_id) if old_id else None
-                    if counts is None and old_id and not quota_exhausted and old_id > 0:
+                    counts = self.historical_db.corner_counts(old_id)
+                    if counts is None and opponent_id and not quota_exhausted and old_id > 0:
                         stats = optional_data(
                             "Historical corner statistics", f"corners:{old_id}",
                             lambda fid=old_id: fetch_fixture_corner_statistics(fid, api_key=key),
