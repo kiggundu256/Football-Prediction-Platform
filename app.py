@@ -743,10 +743,12 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "library_table"):
             return
         stats = self.historical_db.stats()
+        corner_coverage = self.historical_db.corner_coverage_summary()
         self.library_summary.setText(
             f"Stored matches: {stats['matches']:,}  •  Completed: {stats['completed']:,}  •  "
             f"Competitions: {stats['competitions']}  •  Competition-seasons: {stats['competition_seasons']}  •  "
-            f"Matches with saved statistics: {stats['with_statistics']:,}"
+            f"Matches with saved statistics: {stats['with_statistics']:,}  •  "
+            f"Completed matches with both corner totals: {corner_coverage['completed_with_corners']:,}"
         )
         coverage = self.historical_db.coverage_summary()
         self.coverage_table.setRowCount(len(coverage))
@@ -1271,17 +1273,55 @@ class MainWindow(QMainWindow):
         intelligence_heading = QLabel("MATCH INTELLIGENCE")
         intelligence_heading.setStyleSheet("font-size:13px;font-weight:800;color:#168BFF;padding-top:5px")
         box.addWidget(intelligence_heading)
-        self.match_intelligence = QLabel(
-            "Injuries & suspensions: Not loaded  •  Expected lineups: Not loaded  •  "
-            "Referee: Not supplied  •  Weather: Not loaded  •  Corner data: Not loaded"
-        )
-        self.match_intelligence.setWordWrap(True)
-        self.match_intelligence.setStyleSheet(
-            "background:#111D30;border:1px solid #26364D;border-radius:8px;"
-            "padding:10px;color:#D7E3F5"
-        )
-        box.addWidget(self.match_intelligence)
+        self.match_intelligence_scroll = QScrollArea()
+        self.match_intelligence_scroll.setWidgetResizable(True)
+        self.match_intelligence_scroll.setMinimumHeight(190)
+        self.match_intelligence_scroll.setMaximumHeight(280)
+        self.match_intelligence_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.match_intelligence_content = QWidget()
+        self.match_intelligence_layout = QVBoxLayout(self.match_intelligence_content)
+        self.match_intelligence_layout.setContentsMargins(8, 8, 8, 8)
+        self.match_intelligence_layout.setSpacing(8)
+        self.match_intelligence_scroll.setWidget(self.match_intelligence_content)
+        box.addWidget(self.match_intelligence_scroll)
+        self.set_match_intelligence_sections({
+            "Injuries & suspensions": ["Not loaded"],
+            "Expected lineups": ["Not loaded"],
+            "Referee": ["Not supplied"],
+            "Weather": ["Not loaded"],
+            "Corner data": ["Not loaded"],
+        })
         return page
+
+    def set_match_intelligence_sections(self, sections):
+        """Render match intelligence as independently headed, scrollable lists."""
+        if not hasattr(self, "match_intelligence_layout"):
+            return
+        while self.match_intelligence_layout.count():
+            item = self.match_intelligence_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        for heading, values in sections.items():
+            title = QLabel(str(heading).upper())
+            title.setStyleSheet("font-weight:800;color:#168BFF;border:0;padding-top:3px")
+            self.match_intelligence_layout.addWidget(title)
+            entries = values if isinstance(values, (list, tuple)) else [values]
+            if not entries:
+                entries = ["No information supplied"]
+            for value in entries:
+                label = QLabel("• " + str(value))
+                label.setWordWrap(True)
+                label.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                    | Qt.TextInteractionFlag.TextSelectableByKeyboard
+                )
+                label.setStyleSheet(
+                    "background:#111D30;border:1px solid #26364D;border-radius:6px;"
+                    "padding:7px;color:#D7E3F5"
+                )
+                self.match_intelligence_layout.addWidget(label)
+        self.match_intelligence_layout.addStretch(1)
 
     def clear_fixture_filters(self):
         self.fixture_search.clear()
@@ -1589,9 +1629,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Select a match", "Select a fixture first.")
             return
         if self.fixture_data_mode == "demo":
-            self.match_intelligence.setText(
-                "DEMO DATA — no real injuries, lineups, weather or corner statistics are attached."
-            )
+            self.set_match_intelligence_sections({
+                "Data status": ["DEMO DATA — no real injuries, lineups, weather or corner statistics are attached."]
+            })
             return
         fixture = item.get("fixture") or {}
         fixture_id = fixture.get("id")
@@ -1674,10 +1714,15 @@ class MainWindow(QMainWindow):
                 notes.append("Weather unavailable: venue coordinates were not supplied.")
 
             recent = {}
-            for side, team_id in (("home", home_id), ("away", away_id)):
+            for side, team_id, team_name in (("home", home_id, (teams.get("home") or {}).get("name", "")),
+                                             ("away", away_id, (teams.get("away") or {}).get("name", ""))):
                 recent[side] = self.historical_db.team_recent_matches(
                     team_id, match_date, limit=5
                 )
+                if not recent[side] and team_name:
+                    recent[side] = self.historical_db.team_recent_matches_by_name(
+                        team_name, match_date, limit=5, provider_team_id=team_id
+                    )
                 if not recent[side]:
                     recent[side] = optional_data(
                         f"{side.title()} history", f"team_recent:{team_id}:{match_date}:5",
@@ -1704,21 +1749,27 @@ class MainWindow(QMainWindow):
                     opponent_id = old_away.get("id") if old_home.get("id") == team_id else old_home.get("id")
                     if not old_id or not opponent_id:
                         continue
-                    stats = self.historical_db.corner_statistics(old_id)
-                    if stats is None:
+                    counts = self.historical_db.corner_counts(old_id) if old_id else None
+                    if counts is None and old_id and not quota_exhausted and old_id > 0:
                         stats = optional_data(
                             "Historical corner statistics", f"corners:{old_id}",
                             lambda fid=old_id: fetch_fixture_corner_statistics(fid, api_key=key),
                             30 * 24 * 60 * 60,
                         )
-                    if not isinstance(stats, dict):
+                        if isinstance(stats, dict):
+                            self.historical_db.save_corner_statistics(old_id, stats)
+                            counts = self.historical_db.corner_counts(old_id)
+                    if not counts:
                         continue
-                    self.historical_db.save_corner_statistics(old_id, stats)
-                    own = stats.get(str(team_id), stats.get(team_id))
-                    against = stats.get(str(opponent_id), stats.get(opponent_id))
-                    if own is not None and against is not None:
-                        corner_data[f"{side}_for"].append(float(own))
-                        corner_data[f"{side}_against"].append(float(against))
+                    old_home_name = old_home.get("name", "")
+                    old_away_name = old_away.get("name", "")
+                    is_home_team = self.historical_db._team_name_key(old_home_name) == self.historical_db._team_name_key(
+                        (teams.get(side) or {}).get("name", "")
+                    )
+                    own = counts["home"] if is_home_team else counts["away"]
+                    against = counts["away"] if is_home_team else counts["home"]
+                    corner_data[f"{side}_for"].append(float(own))
+                    corner_data[f"{side}_against"].append(float(against))
 
             if all(len(corner_data[f"{side}_for"]) >= 2 for side in ("home", "away")):
                 corner_averages = {
@@ -1734,21 +1785,46 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
             self.intelligence_button.setEnabled(True)
 
-        injury_text = summarize_injuries(injuries) if injuries is not None else "Not loaded"
-        lineup_text = summarize_lineups(lineups) if lineups is not None else "Not loaded"
-        referee = fixture.get("referee") or "Not supplied"
-        weather_text = (
-            f"{weather.get('temperature_c', '—')}°C, rain chance "
-            f"{weather.get('precipitation_probability', '—')}%, wind "
-            f"{weather.get('wind_speed_kmh', '—')} km/h"
-            if isinstance(weather, dict) else "Unavailable"
+        injury_items = []
+        for record in injuries or []:
+            player = record.get("player") or {}
+            team = record.get("team") or {}
+            reason = record.get("reason") or record.get("type") or "Unavailable"
+            name = player.get("name") or "Player not identified"
+            injury_items.append(f"{name} — {reason}" + (f" ({team.get('name')})" if team.get("name") else ""))
+        lineup_items = []
+        for record in lineups or []:
+            team = record.get("team") or {}
+            coach = record.get("coach") or {}
+            lineup_items.append(f"{team.get('name', 'Team')}: {record.get('formation') or 'Formation not supplied'}")
+            if coach.get("name"):
+                lineup_items.append(f"{team.get('name', 'Team')} coach: {coach['name']}")
+            for player in record.get("startXI") or []:
+                person = player.get("player") or {}
+                lineup_items.append(f"{team.get('name', 'Team')} — {person.get('name', 'Player')} (starter)")
+            for player in record.get("substitutes") or []:
+                person = player.get("player") or {}
+                lineup_items.append(f"{team.get('name', 'Team')} — {person.get('name', 'Player')} (substitute)")
+        weather_items = (
+            [f"Temperature: {weather.get('temperature_c', '—')}°C",
+             f"Rain probability: {weather.get('precipitation_probability', '—')}%",
+             f"Wind: {weather.get('wind_speed_kmh', '—')} km/h"]
+            if isinstance(weather, dict) else ["Unavailable"]
         )
-        corner_text = "Loaded" if corner_averages else "Insufficient / unavailable"
-        self.match_intelligence.setText(
-            f"Injuries: {injury_text}  •  Lineups: {lineup_text}  •  Referee: {referee}  •  "
-            f"Weather: {weather_text}  •  Corner data: {corner_text}"
-            + (("\\n" + "\\n".join(notes[:5])) if notes else "")
-        )
+        sections = {
+            "Injuries & suspensions": injury_items or (["No injury records returned"] if injuries is not None else ["Not loaded"]),
+            "Expected lineups": lineup_items or (["Lineups not yet announced / not returned"] if lineups is not None else ["Not loaded"]),
+            "Referee": [fixture.get("referee") or "Not supplied"],
+            "Weather": weather_items,
+            "Corner data": [
+                f"Home avg: {corner_averages.get('home_for', 0):.2f} for / {corner_averages.get('home_against', 0):.2f} against; "
+                f"Away avg: {corner_averages.get('away_for', 0):.2f} for / {corner_averages.get('away_against', 0):.2f} against"
+                if corner_averages else "Insufficient historical corner coverage for both teams"
+            ],
+        }
+        if notes:
+            sections["Data notes"] = notes[:8]
+        self.set_match_intelligence_sections(sections)
         self.api_message.setText(
             "API quota limit detected; remaining optional calls were stopped. Cached data remains available."
             if quota_exhausted else
