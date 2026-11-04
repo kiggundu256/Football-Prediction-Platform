@@ -712,7 +712,19 @@ class MainWindow(QMainWindow):
         self.coverage_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.coverage_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         enable_table_copy(self.coverage_table)
+        self.coverage_table.cellDoubleClicked.connect(
+            lambda row, column: self.show_coverage_details(row)
+        )
         box.addWidget(self.coverage_table)
+        coverage_actions = QHBoxLayout()
+        coverage_actions.addWidget(QLabel("Double-click a competition/season row or select it and view details."))
+        coverage_actions.addStretch()
+        self.view_coverage_details_button = QPushButton("View selected details")
+        self.view_coverage_details_button.clicked.connect(
+            lambda: self.show_coverage_details(self.coverage_table.currentRow())
+        )
+        coverage_actions.addWidget(self.view_coverage_details_button)
+        box.addLayout(coverage_actions)
         csv_heading = QLabel("CSV IMPORT HISTORY")
         csv_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
         box.addWidget(csv_heading)
@@ -728,7 +740,19 @@ class MainWindow(QMainWindow):
         self.csv_import_history_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.csv_import_history_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         enable_table_copy(self.csv_import_history_table)
+        self.csv_import_history_table.cellDoubleClicked.connect(
+            lambda row, column: self.show_csv_import_details(row)
+        )
         box.addWidget(self.csv_import_history_table)
+        csv_actions = QHBoxLayout()
+        csv_actions.addWidget(QLabel("Double-click an imported file or select it and view details."))
+        csv_actions.addStretch()
+        self.view_csv_details_button = QPushButton("View selected CSV details")
+        self.view_csv_details_button.clicked.connect(
+            lambda: self.show_csv_import_details(self.csv_import_history_table.currentRow())
+        )
+        csv_actions.addWidget(self.view_csv_details_button)
+        box.addLayout(csv_actions)
         self.refresh_data_library()
 
         scroll = QScrollArea()
@@ -765,7 +789,14 @@ class MainWindow(QMainWindow):
                 corner_counts.get((record["competition"], record["season"]), 0),
             ]
             for column, value in enumerate(values):
-                self.coverage_table.setItem(row_index, column, QTableWidgetItem(str(value)))
+                item = QTableWidgetItem(str(value))
+                if column == 0:
+                    detail_record = dict(record)
+                    detail_record["corner_matches"] = corner_counts.get(
+                        (record["competition"], record["season"]), 0
+                    )
+                    item.setData(Qt.ItemDataRole.UserRole, detail_record)
+                self.coverage_table.setItem(row_index, column, item)
         rows = self.historical_db.season_summary()
         self.library_table.setRowCount(len(rows))
         for row_index, record in enumerate(rows):
@@ -787,9 +818,81 @@ class MainWindow(QMainWindow):
                     (record["imported_at_utc"] or "").replace("T", " ")[:19],
                 ]
                 for column, value in enumerate(values):
-                    self.csv_import_history_table.setItem(
-                        row_index, column, QTableWidgetItem(str(value))
-                    )
+                    item = QTableWidgetItem(str(value))
+                    if column == 0:
+                        item.setData(Qt.ItemDataRole.UserRole, record.get("file_sha256"))
+                    self.csv_import_history_table.setItem(row_index, column, item)
+
+    def show_coverage_details(self, row):
+        if row is None or row < 0:
+            QMessageBox.information(self, "Select a competition", "Select a competition/season row first.")
+            return
+        item = self.coverage_table.item(row, 0)
+        record = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not record:
+            return
+        details = [
+            f"Competition: {record['competition']}",
+            f"Country: {record.get('country') or '—'}",
+            f"Season: {record['season']}",
+            f"Stored matches: {record['match_count']:,}",
+            f"Completed matches: {record['completed_count']:,}",
+            f"Distinct teams: {record['team_count']:,}",
+            f"CSV records: {record['csv_count']:,}",
+            f"API records: {record['api_count']:,}",
+            f"Date range: {record.get('date_from') or '—'} to {record.get('date_to') or '—'}",
+            f"Completed matches with both corner totals: {record['corner_matches']:,}",
+        ]
+        QMessageBox.information(self, "Competition / season details", "\\n".join(details))
+
+    def show_csv_import_details(self, row):
+        if row is None or row < 0:
+            QMessageBox.information(self, "Select an imported file", "Select a CSV import row first.")
+            return
+        item = self.csv_import_history_table.item(row, 0)
+        file_hash = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not file_hash:
+            return
+        record = self.csv_importer.inspect_import(file_hash)
+        if not record:
+            QMessageBox.warning(self, "Import details unavailable", "The selected import record could not be found.")
+            return
+        headers = record.get("headers")
+        mapped = record.get("mapped_columns")
+        lines = [
+            f"File: {record['file_name']}",
+            f"Competition: {record['competition']}",
+            f"Recorded season: {record['season']}",
+            f"Rows stored at import: {record['imported_rows']:,}",
+            f"Rows skipped: {record['skipped_rows']:,}",
+            f"Corner rows detected while parsing: {record.get('parsed_corner_rows', 0):,}",
+            f"Stored rows still linked to this CSV: {record.get('stored_matches_found', 0):,}",
+            f"Stored rows with both corner totals: {record.get('stored_corner_matches', 0):,}",
+            "",
+        ]
+        if headers:
+            lines.append("ORIGINAL CSV HEADERS")
+            lines.append(", ".join(headers))
+            lines.append("")
+            lines.append("RECOGNISED COLUMN MAPPING")
+            if mapped:
+                lines.extend(f"{field}: {header}" for field, header in sorted(mapped.items()))
+            else:
+                lines.append("No saved column mapping is available.")
+            lines.append(f"Home-corners column recognised: {'Yes' if 'home_corners' in mapped else 'No'}")
+            lines.append(f"Away-corners column recognised: {'Yes' if 'away_corners' in mapped else 'No'}")
+        else:
+            lines.extend([
+                "ORIGINAL CSV HEADERS",
+                "Not recorded for this older import. The app can show fields retained in the database,",
+                "but the exact original header row was not saved at the time of import.",
+                "",
+                "STATISTIC FIELDS FOUND IN STORED MATCHES",
+                ", ".join(record.get("observed_fields") or []) or "No statistic fields were retained.",
+                f"Home-corners values found: {'Yes' if 'home_corners' in (record.get('observed_fields') or []) else 'No'}",
+                f"Away-corners values found: {'Yes' if 'away_corners' in (record.get('observed_fields') or []) else 'No'}",
+            ])
+        QMessageBox.information(self, "CSV import details", "\\n".join(lines))
 
     def clear_csv_imports(self):
         answer = QMessageBox.question(
