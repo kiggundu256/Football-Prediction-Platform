@@ -699,10 +699,10 @@ class MainWindow(QMainWindow):
         )
         coverage_note.setWordWrap(True)
         box.addWidget(coverage_note)
-        self.coverage_table = QTableWidget(0, 9)
+        self.coverage_table = QTableWidget(0, 10)
         self.coverage_table.setHorizontalHeaderLabels([
             "Competition", "Country", "Season", "Matches", "Completed",
-            "Teams", "CSV", "API", "Date range"
+            "Teams", "CSV", "API", "Date range", "Matches with corners"
         ])
         self.coverage_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.coverage_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -751,6 +751,10 @@ class MainWindow(QMainWindow):
             f"Completed matches with both corner totals: {corner_coverage['completed_with_corners']:,}"
         )
         coverage = self.historical_db.coverage_summary()
+        corner_rows = self.historical_db.corner_coverage_summary()["by_competition"]
+        corner_counts = {
+            (row["competition"], row["season"]): row["matches"] for row in corner_rows
+        }
         self.coverage_table.setRowCount(len(coverage))
         for row_index, record in enumerate(coverage):
             values = [
@@ -758,6 +762,7 @@ class MainWindow(QMainWindow):
                 record["match_count"], record["completed_count"], record["team_count"],
                 record["csv_count"], record["api_count"],
                 f"{record['date_from']} → {record['date_to']}",
+                corner_counts.get((record["competition"], record["season"]), 0),
             ]
             for column, value in enumerate(values):
                 self.coverage_table.setItem(row_index, column, QTableWidgetItem(str(value)))
