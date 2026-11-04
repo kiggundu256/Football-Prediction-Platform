@@ -272,16 +272,30 @@ class HistoricalDatabase:
         """Count completed historical matches with both observed team corner totals."""
         with self.connect() as db:
             rows = db.execute("""
-                SELECT fixture_id,competition,season
+                SELECT competition,season,stats_json,home_team_id,away_team_id
                 FROM historical_matches
                 WHERE status IN ('FT','AET','PEN')
                 ORDER BY competition,season
             """).fetchall()
         by_competition = {}
         for row in rows:
-            if self.corner_counts(row["fixture_id"]):
-                key = (row["competition"], row["season"])
-                by_competition[key] = by_competition.get(key, 0) + 1
+            stats = json.loads(row["stats_json"]) if row["stats_json"] else {}
+            home = stats.get("home_corners")
+            away = stats.get("away_corners")
+            by_team = stats.get("corners_by_team") or {}
+            if home is None:
+                home = by_team.get(str(row["home_team_id"]), by_team.get(row["home_team_id"]))
+            if away is None:
+                away = by_team.get(str(row["away_team_id"]), by_team.get(row["away_team_id"]))
+            if home is None or away is None:
+                continue
+            try:
+                float(home)
+                float(away)
+            except (TypeError, ValueError):
+                continue
+            key = (row["competition"], row["season"])
+            by_competition[key] = by_competition.get(key, 0) + 1
         return {
             "completed_with_corners": sum(by_competition.values()),
             "by_competition": [
