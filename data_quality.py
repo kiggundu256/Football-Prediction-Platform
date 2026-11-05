@@ -10,7 +10,7 @@ def _name_key(value):
     return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
 
 
-def inspect_data_quality(database_path, from_year=2022, sample_limit=200):
+def inspect_data_quality(database_path, from_year=2020, sample_limit=200):
     """Summarize coverage and flag suspicious rows without changing stored data."""
     db = sqlite3.connect(str(database_path))
     db.row_factory = sqlite3.Row
@@ -26,7 +26,7 @@ def inspect_data_quality(database_path, from_year=2022, sample_limit=200):
 
     total = len(rows)
     in_scope = []
-    outside_window = []
+    before_start_year = []
     missing_team = []
     missing_season = []
     invalid_date = []
@@ -45,8 +45,10 @@ def inspect_data_quality(database_path, from_year=2022, sample_limit=200):
             match_day = None
             valid_date = False
             invalid_date.append(row)
-        if not valid_date or match_day.year < int(from_year):
-            outside_window.append(row)
+        if not valid_date:
+            continue
+        if match_day.year < int(from_year):
+            before_start_year.append(row)
             continue
         in_scope.append(row)
 
@@ -169,7 +171,8 @@ def inspect_data_quality(database_path, from_year=2022, sample_limit=200):
         "from_year": int(from_year),
         "total_records": total,
         "records_in_scope": len(in_scope),
-        "records_before_window_or_invalid_date": len(outside_window),
+        "records_before_start_year": len(before_start_year),
+        "invalid_date_records": len(invalid_date),
         "competitions": len({(r.get("league_id"), r.get("competition")) for r in in_scope}),
         "competition_seasons": len(coverage),
         "completed_matches": sum(str(r.get("status") or "").upper() in {"FT", "AET", "PEN"} for r in in_scope),
