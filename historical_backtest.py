@@ -241,6 +241,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                                    for sh, sa, _ in normalized_scores)
                     score_top1_correct += int(top1_hit)
                     score_top5_correct += int(top5_hit)
+                    calibration_samples["Correct score (top 1)"].append((top_score[2], top1_hit))
                     _market_add(
                         market_stats, "Correct score (top 1)", top1_hit, True,
                         brier_value=(top_score[2] - float(top1_hit)) ** 2,
