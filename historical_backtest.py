@@ -127,6 +127,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         "baseline_log_loss_sum": 0.0,
     })
     market_stats = {}
+    model_comparison = {}
     calibration_samples = defaultdict(list)
     score_top1_correct = score_top5_correct = score_graded = 0
     corner_graded = 0
@@ -164,6 +165,32 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             actual_outcome = 0 if actual_home > actual_away else (2 if actual_home < actual_away else 1)
             probabilities = [float(markets[key]) for key in ("home_win", "draw", "away_win")]
             predicted_outcome = max(range(3), key=lambda index: probabilities[index])
+            component_models = {
+                "Goal distribution": forecast.get("goal_model", {}),
+                "Recent form": forecast.get("form_model", {}),
+                "Ensemble": markets,
+            }
+            for model_name, component in component_models.items():
+                try:
+                    component_probs = [float(component[key]) for key in ("home_win", "draw", "away_win")]
+                    component_prediction = max(range(3), key=lambda index: component_probs[index])
+                    component_brier = sum(
+                        (component_probs[i] - (1.0 if i == actual_outcome else 0.0)) ** 2
+                        for i in range(3)
+                    ) / 3.0
+                    component_loss = -log(max(component_probs[actual_outcome], 1e-15))
+                    stats = model_comparison.setdefault(model_name, {
+                        "matches": 0, "correct": 0, "brier_sum": 0.0, "log_loss_sum": 0.0,
+                    })
+                    stats["matches"] += 1
+                    stats["correct"] += int(component_prediction == actual_outcome)
+                    stats["brier_sum"] += component_brier
+                    stats["log_loss_sum"] += component_loss
+                    calibration_samples[f"{model_name} 1X2"].append(
+                        (max(component_probs), component_prediction == actual_outcome)
+                    )
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    continue
             actual_vector = [1.0 if index == actual_outcome else 0.0 for index in range(3)]
             model_brier = sum((probabilities[i] - actual_vector[i]) ** 2 for i in range(3)) / 3.0
             model_loss = -log(max(probabilities[actual_outcome], 1e-15))
@@ -310,7 +337,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "source_completed_matches": len(rows), "evaluated_matches": 0,
             "skipped_insufficient_history": skipped_insufficient_history,
             "message": "No matches had enough prior team history to evaluate.",
-            "by_market": {}, "by_competition_season": [],
+            "by_market": {}, "by_competition_season": [], "by_model": [],
             "calibration_by_market": {}, "correct_score": {"graded": 0, "top1_accuracy": None, "top5_coverage": None},
         }
 
@@ -358,6 +385,13 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         "calibration_by_market": {
             name: _calibration_bins(samples) for name, samples in sorted(calibration_samples.items())
         },
+        "by_model": [{
+            "model": name,
+            "matches": item["matches"],
+            "accuracy": item["correct"] / item["matches"] if item["matches"] else None,
+            "brier_score": item["brier_sum"] / item["matches"] if item["matches"] else None,
+            "log_loss": item["log_loss_sum"] / item["matches"] if item["matches"] else None,
+        } for name, item in sorted(model_comparison.items())],
         "by_market": _finalize_market_stats(market_stats),
         "by_competition_season": groups,
         "methodology": (
