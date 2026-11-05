@@ -608,7 +608,7 @@ class MainWindow(QMainWindow):
         intro.setWordWrap(True)
         box.addWidget(intro)
 
-        quality_heading = QLabel("DATA INTEGRITY & COVERAGE  •  JANUARY 2022 ONWARD")
+        quality_heading = QLabel("DATA INTEGRITY & COVERAGE  •  JANUARY 2020 ONWARD")
         quality_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
         box.addWidget(quality_heading)
         quality_note = QLabel(
@@ -622,7 +622,7 @@ class MainWindow(QMainWindow):
         self.run_data_quality_button = QPushButton("Run Data Integrity Scan")
         self.run_data_quality_button.clicked.connect(self.run_data_quality_scan)
         quality_actions.addWidget(self.run_data_quality_button)
-        self.data_quality_summary = QLabel("Run the scan to inspect stored records from January 2022 onward.")
+        self.data_quality_summary = QLabel("Run the scan to inspect all valid dated records from January 2020 onward.")
         self.data_quality_summary.setWordWrap(True)
         quality_actions.addWidget(self.data_quality_summary, 1)
         box.addLayout(quality_actions)
@@ -636,7 +636,7 @@ class MainWindow(QMainWindow):
         enable_table_copy(self.data_quality_issues_table)
         box.addWidget(self.data_quality_issues_table)
 
-        quality_coverage_heading = QLabel("VERIFIED HISTORICAL COVERAGE (2022+)")
+        quality_coverage_heading = QLabel("VERIFIED HISTORICAL COVERAGE (2020+)")
         quality_coverage_heading.setStyleSheet("font-size:14px;font-weight:700;color:#168BFF;margin-top:6px")
         box.addWidget(quality_coverage_heading)
         self.verified_coverage_total_label = QLabel(
@@ -726,10 +726,10 @@ class MainWindow(QMainWindow):
         actions.addWidget(refresh)
         box.addLayout(actions)
         synced_actions = QHBoxLayout()
-        self.import_synced_data_button = QPushButton("Import Synced 2022+ Dataset")
+        self.import_synced_data_button = QPushButton("Import Synced OpenFootball Dataset")
         self.import_synced_data_button.clicked.connect(self.import_synced_openfootball_data)
         synced_actions.addWidget(self.import_synced_data_button)
-        synced_actions.addWidget(QLabel("Bundled public-domain results: 2022 onward"))
+        synced_actions.addWidget(QLabel("Optional bundled public-domain archive (separate from your imported CSV history)"))
         synced_actions.addStretch()
         box.addLayout(synced_actions)
         self.csv_folder_preview = QTableWidget(0, 7)
@@ -891,14 +891,14 @@ class MainWindow(QMainWindow):
         self.run_data_quality_button.setText("Scanning…")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            report = inspect_data_quality(self.historical_db.path, from_year=2022)
+            report = inspect_data_quality(self.historical_db.path, from_year=2020)
             self.data_quality_summary.setText(
                 f"Stored records: {report['total_records']:,}  •  "
-                f"2022+ records: {report['records_in_scope']:,}  •  "
+                f"2020+ valid-date records: {report['records_in_scope']:,}  •  "
                 f"Completed: {report['completed_matches']:,}  •  "
                 f"Competitions: {report['competitions']}  •  "
                 f"Competition-seasons: {report['competition_seasons']}  •  "
-                f"Before 2022 / invalid dates: {report['records_before_window_or_invalid_date']:,}"
+                f"Before 2020: {report['records_before_start_year']:,}  •  Invalid dates: {report['invalid_date_records']:,}"
             )
             issues = report["issues"]
             self.data_quality_issues_table.setRowCount(len(issues))
@@ -914,7 +914,7 @@ class MainWindow(QMainWindow):
             verified_completed = sum(item["completed"] for item in coverage)
             verified_competitions = len({item["competition"] for item in coverage})
             self.verified_coverage_total_label.setText(
-                f"2022+ verified totals: {verified_matches:,} matches  •  "
+                f"2020+ verified totals: {verified_matches:,} matches  •  "
                 f"{verified_completed:,} completed  •  {verified_competitions:,} competitions  •  "
                 f"{len(coverage):,} competition-seasons"
             )
@@ -1154,13 +1154,13 @@ class MainWindow(QMainWindow):
         if not folder.exists():
             QMessageBox.information(
                 self, "Synced dataset not found",
-                "The bundled 2022+ archive is not present in this app build. "
+                "The optional bundled OpenFootball archive is not present in this app build. "
                 "Pull the latest GitHub changes and download the latest Windows build."
             )
             return
 
         self.csv_folder_path = str(folder)
-        self.library_status.setText("Checking the bundled 2022+ historical archive...")
+        self.library_status.setText("Checking the optional bundled OpenFootball historical archive...")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             previews, errors = scan_csv_folder(folder)
@@ -2504,7 +2504,7 @@ class MainWindow(QMainWindow):
             f"{(item.get('league') or {}).get('name', 'Unknown')} • Analysis #{prediction_id}\\n\\n"
             "MODEL INPUTS\\n"
             f"Historical completed matches: {home_name} {hr['played']}, {away_name} {ar['played']} "
-            "(up to 5 per team; Free-plan seasons 2022–2024)\\n"
+            "(up to 5 per team; local historical database is preferred when available)\\n"
             f"Estimated goals (xG-style baseline): {home_name} {home_xg:.2f} — "
             f"{away_xg:.2f} {away_name}\\n\\n"
             "PREDICTED MARKETS\\n"
@@ -2516,8 +2516,8 @@ class MainWindow(QMainWindow):
             f"BTTS Yes {markets['btts_yes']:.1%} | BTTS No {markets['btts_no']:.1%}\\n"
             f"Most likely scorelines: {scores}\\n\\n"
             + "\\n".join(explanation)
-            + "\\n\\nDATA COVERAGE: The free-plan historical seasons 2022–2024 are used; "
-            "this is not current-season form."
+            + "\\n\\nDATA COVERAGE: Historical matches are drawn from the local database when available; "
+            "coverage depends on imported dates, completed results and team-name matching."
         )
         self.api_message.setText(
             f"Analysis ready and saved (#{prediction_id}) for {home_name} vs {away_name}. "
