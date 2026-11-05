@@ -193,14 +193,19 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 except (TypeError, ValueError, KeyError):
                     pass
 
-            pending_history.append((home_key, away_key, row, corner_data, league_key, actual_outcome))
+            pending_history.append((home_key, away_key, row, corner_data))
 
             if max_matches is not None and evaluated >= int(max_matches):
                 break
 
         # Only results from the completed date become available to later dates.
-        for home_key, away_key, row, corner_data, league_key, actual_outcome in pending_history:
+        for row in day_rows:
+            league_key = (str(row["country"] or ""), str(row["competition"] or ""))
+            actual_home, actual_away = int(row["home_goals"]), int(row["away_goals"])
+            actual_outcome = 0 if actual_home > actual_away else (2 if actual_home < actual_away else 1)
             league_outcomes[league_key][actual_outcome] += 1
+
+        for home_key, away_key, row, corner_data in pending_history:
             try:
                 hc, ac = corner_data.get("home_corners"), corner_data.get("away_corners")
                 hc = float(hc) if hc is not None else None
