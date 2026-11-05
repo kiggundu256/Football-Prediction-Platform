@@ -3012,7 +3012,15 @@ class MainWindow(QMainWindow):
         return page
 
     def performance(self):
-        page = QWidget(); box = QVBoxLayout(page)
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        box = QVBoxLayout(content)
+        scroll.setWidget(content)
+        page_layout.addWidget(scroll)
         title = QLabel("Performance Lab")
         title.setStyleSheet("font-size:20px;font-weight:700;color:#EAF2FF")
         box.addWidget(title)
