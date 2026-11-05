@@ -3155,10 +3155,18 @@ class MainWindow(QMainWindow):
         backtest_market_title = QLabel("Historical market performance")
         backtest_market_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
         box.addWidget(backtest_market_title)
-        self.backtest_market_table = QTableWidget(0, 5)
-        self.backtest_market_table.setHorizontalHeaderLabels(
-            ["Market", "Graded", "Correct", "Accuracy", "Brier score"]
+        self.backtest_market_table = QTableWidget(0, 7)
+        self.backtest_market_table.setHorizontalHeaderLabels([
+            "Market / event", "Graded", "Correct side selections",
+            "Selection accuracy", "Observed event rate", "Calibrated Brier", "Raw Brier"
+        ])
+        market_note = QLabel(
+            "Selection accuracy measures whether the model chose the more likely side. "
+            "Observed event rate is the historical hit rate for always choosing the named event "
+            "(for example, always Over 2.5). These are different measures."
         )
+        market_note.setWordWrap(True)
+        box.addWidget(market_note)
         self.backtest_market_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.backtest_market_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
         self.backtest_market_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
@@ -3172,9 +3180,10 @@ class MainWindow(QMainWindow):
         backtest_calibration_title = QLabel("Historical probability calibration")
         backtest_calibration_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
         box.addWidget(backtest_calibration_title)
-        self.backtest_calibration_table = QTableWidget(0, 5)
+        self.backtest_calibration_table = QTableWidget(0, 6)
         self.backtest_calibration_table.setHorizontalHeaderLabels([
-            "Market / event", "Confidence range", "Graded", "Average probability", "Observed rate"
+            "Market / event", "Probability set", "Confidence range", "Graded",
+            "Average probability", "Observed rate"
         ])
         self.backtest_calibration_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.backtest_calibration_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
@@ -3341,7 +3350,9 @@ class MainWindow(QMainWindow):
         self.backtest_status.setText(
             f"Completed: {result['evaluated_matches']:,} historical matches evaluated from {result['from_year']} onward. "
             f"Corner market selections graded: {result.get('corner_market_predictions', 0):,}. "
-            "The imported database was read only."
+            f"Corner calibration uses earlier dates only (30 prior same-bin samples required; "
+            f"{result.get('corner_calibration', {}).get('prior_strength', 30)} pseudo-sample shrinkage). "
+            "Raw and calibrated Brier scores are shown separately. The imported database was read only."
         )
 
         model_rows = result.get("by_model", [])
@@ -3361,7 +3372,15 @@ class MainWindow(QMainWindow):
             for item in bins:
                 if item.get("count", 0):
                     calibration_rows.append((
-                        market_name, item["range"], item["count"],
+                        market_name, "Calibrated", item["range"], item["count"],
+                        f"{item['mean_probability']:.1%}",
+                        f"{item['observed_rate']:.1%}",
+                    ))
+        for market_name, bins in result.get("raw_calibration_by_market", {}).items():
+            for item in bins:
+                if item.get("count", 0):
+                    calibration_rows.append((
+                        market_name, "Raw", item["range"], item["count"],
                         f"{item['mean_probability']:.1%}",
                         f"{item['observed_rate']:.1%}",
                     ))
@@ -3375,8 +3394,10 @@ class MainWindow(QMainWindow):
         for row, (name, stats) in enumerate(sorted(markets.items())):
             values = [
                 name, stats["graded"], stats["correct"],
-                f"{stats['accuracy']:.1%}" if stats.get("accuracy") is not None else "—",
+                f"{stats['selection_accuracy']:.1%}" if stats.get("selection_accuracy") is not None else "—",
+                f"{stats['observed_event_rate']:.1%}" if stats.get("observed_event_rate") is not None else "—",
                 f"{stats['brier_score']:.4f}" if stats.get("brier_score") is not None else "—",
+                f"{stats['raw_brier_score']:.4f}" if stats.get("raw_brier_score") is not None else "—",
             ]
             for column, value in enumerate(values):
                 self.backtest_market_table.setItem(row, column, QTableWidgetItem(str(value)))

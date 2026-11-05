@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from historical_backtest import run_historical_backtest
+from historical_backtest import run_historical_backtest, _prequential_calibrate
 
 
 def insert_match(db, fixture_id, day, home, away, hg, ag, competition="Premier League",
@@ -90,6 +90,27 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("Correct score (top 1)", result["by_market"])
         self.assertIn("1X2 most-likely outcome", result["calibration_by_market"])
         self.assertEqual(len(result["calibration_by_market"]["1X2 most-likely outcome"]), 10)
+
+    def test_prequential_corner_calibration_uses_only_prior_bin_samples(self):
+        prior = [(0.82, False)] * 30
+        calibrated = _prequential_calibrate(0.82, prior)
+        self.assertAlmostEqual(calibrated, 0.41)
+        self.assertEqual(_prequential_calibrate(0.82, prior[:29]), 0.82)
+
+    def test_market_report_separates_selection_accuracy_from_event_rate(self):
+        result = run_historical_backtest(self.path, from_year=2020, minimum_history=5)
+        over = result["by_market"]["Corners Over 7.5"]
+        self.assertIn("selection_accuracy", over)
+        self.assertIn("observed_event_rate", over)
+        self.assertIn("raw_brier_score", over)
+        self.assertIn("raw_calibration_by_market", result)
+        self.assertIn("corner_calibration", result)
+        self.assertIn("leakage_control", result["corner_calibration"])
+        # Both graded fixtures are on the same date, so neither can train the other.
+        self.assertTrue(all(
+            count == 0
+            for count in result["corner_calibration"]["training_samples_by_market"].values()
+        ))
 
     def test_no_evaluation_when_prior_history_is_insufficient(self):
         result = run_historical_backtest(self.path, from_year=2020, minimum_history=6)
