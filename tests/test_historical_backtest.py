@@ -106,6 +106,11 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("raw_calibration_by_market", result)
         self.assertIn("corner_calibration", result)
         self.assertIn("leakage_control", result["corner_calibration"])
+        # Both graded fixtures are on the same date, so neither can train the other.
+        self.assertTrue(all(
+            count == 0
+            for count in result["corner_calibration"]["training_samples_by_market"].values()
+        ))
 
     def test_no_evaluation_when_prior_history_is_insufficient(self):
         result = run_historical_backtest(self.path, from_year=2020, minimum_history=6)
