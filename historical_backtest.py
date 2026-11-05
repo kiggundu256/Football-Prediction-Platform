@@ -193,15 +193,14 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 except (TypeError, ValueError, KeyError):
                     pass
 
-            # Add actual results to league baseline only after forecasting this match.
-            league_outcomes[league_key][actual_outcome] += 1
-            pending_history.append((home_key, away_key, row, corner_data))
+            pending_history.append((home_key, away_key, row, corner_data, league_key, actual_outcome))
 
             if max_matches is not None and evaluated >= int(max_matches):
                 break
 
         # Only results from the completed date become available to later dates.
-        for home_key, away_key, row, corner_data in pending_history:
+        for home_key, away_key, row, corner_data, league_key, actual_outcome in pending_history:
+            league_outcomes[league_key][actual_outcome] += 1
             try:
                 hc, ac = corner_data.get("home_corners"), corner_data.get("away_corners")
                 hc = float(hc) if hc is not None else None
