@@ -3218,6 +3218,8 @@ class MainWindow(QMainWindow):
         refresh = QPushButton("Refresh performance")
         refresh.clicked.connect(self.refresh_performance)
         box.addWidget(refresh)
+        for table in page.findChildren(QTableWidget):
+            enable_table_copy(table)
         self.refresh_performance()
         return page
 
