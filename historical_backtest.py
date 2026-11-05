@@ -253,11 +253,20 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 actual_over = total_goals > line
                 _market_add(market_stats, f"Over {line}", probability >= 0.5, actual_over, probability)
                 calibration_samples[f"Over {line}"].append((probability, actual_over))
+                under_probability = 1.0 - probability
+                actual_under = not actual_over
+                _market_add(market_stats, f"Under {line}", under_probability >= 0.5,
+                            actual_under, under_probability)
+                calibration_samples[f"Under {line}"].append((under_probability, actual_under))
             btts_probability = float(markets["btts_yes"])
             actual_btts = actual_home > 0 and actual_away > 0
             _market_add(market_stats, "BTTS Yes", btts_probability >= 0.5,
                         actual_btts, btts_probability)
             calibration_samples["BTTS Yes"].append((btts_probability, actual_btts))
+            btts_no_probability = 1.0 - btts_probability
+            _market_add(market_stats, "BTTS No", btts_no_probability >= 0.5,
+                        not actual_btts, btts_no_probability)
+            calibration_samples["BTTS No"].append((btts_no_probability, not actual_btts))
 
             try:
                 corner_data = json.loads(row["stats_json"] or "{}")
@@ -281,7 +290,12 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                         name = f"Corners Over {line}"
                         _market_add(market_stats, name, probability >= 0.5, actual_over, probability)
                         calibration_samples[name].append((probability, actual_over))
-                        corner_graded += 1
+                        under_probability = 1.0 - probability
+                        under_name = f"Corners Under {line}"
+                        _market_add(market_stats, under_name, under_probability >= 0.5,
+                                    not actual_over, under_probability)
+                        calibration_samples[under_name].append((under_probability, not actual_over))
+                        corner_graded += 2
                     for prefix, observed, forecast_key in (
                         ("Home team corners", float(home_corners), "home_over"),
                         ("Away team corners", float(away_corners), "away_over"),
@@ -293,7 +307,12 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                             _market_add(market_stats, name, probability >= 0.5,
                                         actual_over, probability)
                             calibration_samples[name].append((probability, actual_over))
-                            corner_graded += 1
+                            under_probability = 1.0 - probability
+                            under_name = f"{prefix} Under {line}"
+                            _market_add(market_stats, under_name, under_probability >= 0.5,
+                                        not actual_over, under_probability)
+                            calibration_samples[under_name].append((under_probability, not actual_over))
+                            corner_graded += 2
                 except (TypeError, ValueError, KeyError):
                     pass
 
