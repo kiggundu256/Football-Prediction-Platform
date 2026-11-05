@@ -9,7 +9,7 @@ from pathlib import Path
 
 import keyring
 from api_usage import api_requests_today
-from PySide6.QtCore import Qt, QDate
+from PySide6.QtCore import Qt, QDate, QThread, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog,
@@ -33,6 +33,7 @@ from head_to_head import summarize_head_to_head
 from ui_theme import APP_STYLESHEET
 from settlement import settle_markets
 from performance_metrics import summarize_performance
+from historical_backtest import run_historical_backtest
 from fixture_view import filter_fixtures, competition_options, fixture_status_group
 from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
 from csv_historical_importer import (HistoricalCsvImporter, scan_csv_folder, inspect_csv_file, _stable_id, _season_start)
@@ -291,6 +292,28 @@ class Store:
                 (home_goals, away_goals, datetime.now(timezone.utc).isoformat(),
                  json.dumps(outcomes), prediction_id))
 
+
+
+class HistoricalBacktestWorker(QThread):
+    completed = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, database_path, from_year, minimum_history):
+        super().__init__()
+        self.database_path = database_path
+        self.from_year = from_year
+        self.minimum_history = minimum_history
+
+    def run(self):
+        try:
+            result = run_historical_backtest(
+                self.database_path,
+                from_year=self.from_year,
+                minimum_history=self.minimum_history,
+            )
+            self.completed.emit(result)
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class Card(QFrame):
@@ -3044,11 +3067,159 @@ class MainWindow(QMainWindow):
         self.model_performance_table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.model_performance_table)
 
+        backtest_title = QLabel("Historical walk-forward backtest")
+        backtest_title.setStyleSheet("font-size:17px;font-weight:800;color:#EAF2FF;margin-top:12px")
+        box.addWidget(backtest_title)
+        backtest_intro = QLabel(
+            "Test the current prediction formula against completed matches from your local database. "
+            "Each match is forecast using only results from earlier calendar days. The model formula is not changed."
+        )
+        backtest_intro.setWordWrap(True)
+        box.addWidget(backtest_intro)
+
+        backtest_controls = QHBoxLayout()
+        backtest_controls.addWidget(QLabel("Start year:"))
+        self.backtest_from_year = QSpinBox()
+        self.backtest_from_year.setRange(2000, 2100)
+        self.backtest_from_year.setValue(2020)
+        backtest_controls.addWidget(self.backtest_from_year)
+        backtest_controls.addWidget(QLabel("Minimum prior matches per team:"))
+        self.backtest_min_history = QSpinBox()
+        self.backtest_min_history.setRange(1, 10)
+        self.backtest_min_history.setValue(5)
+        backtest_controls.addWidget(self.backtest_min_history)
+        self.backtest_button = QPushButton("Run Historical Backtest")
+        self.backtest_button.clicked.connect(self.run_historical_backtest_ui)
+        backtest_controls.addWidget(self.backtest_button)
+        backtest_controls.addStretch()
+        box.addLayout(backtest_controls)
+
+        self.backtest_status = QLabel("Not run yet. This test reads your imported history and does not modify it.")
+        self.backtest_status.setWordWrap(True)
+        box.addWidget(self.backtest_status)
+        backtest_cards = QGridLayout()
+        self.backtest_source_card = Card("COMPLETED SOURCE MATCHES", "—", "From selected start year")
+        self.backtest_evaluated_card = Card("MATCHES EVALUATED", "—", "Enough prior team history")
+        self.backtest_accuracy_card = Card("1X2 ACCURACY", "—", "Most likely outcome")
+        self.backtest_skipped_card = Card("SKIPPED MATCHES", "—", "Insufficient prior history")
+        backtest_cards.addWidget(self.backtest_source_card, 0, 0)
+        backtest_cards.addWidget(self.backtest_evaluated_card, 0, 1)
+        backtest_cards.addWidget(self.backtest_accuracy_card, 0, 2)
+        backtest_cards.addWidget(self.backtest_skipped_card, 0, 3)
+        box.addLayout(backtest_cards)
+
+        self.backtest_comparison = QLabel("1X2 probability quality vs the prior-results competition baseline: —")
+        self.backtest_comparison.setWordWrap(True)
+        box.addWidget(self.backtest_comparison)
+
+        backtest_market_title = QLabel("Historical market performance")
+        backtest_market_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
+        box.addWidget(backtest_market_title)
+        self.backtest_market_table = QTableWidget(0, 5)
+        self.backtest_market_table.setHorizontalHeaderLabels(
+            ["Market", "Graded", "Correct", "Accuracy", "Brier score"]
+        )
+        self.backtest_market_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.backtest_market_table.setMaximumHeight(220)
+        self.backtest_market_table.horizontalHeader().setStretchLastSection(True)
+        box.addWidget(self.backtest_market_table)
+
+        backtest_comp_title = QLabel("Performance by competition and season")
+        backtest_comp_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
+        box.addWidget(backtest_comp_title)
+        self.backtest_comp_table = QTableWidget(0, 7)
+        self.backtest_comp_table.setHorizontalHeaderLabels([
+            "Competition / season", "Matches", "1X2 accuracy", "Model Brier",
+            "Baseline Brier", "Model log loss", "Baseline log loss"
+        ])
+        self.backtest_comp_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.backtest_comp_table.setMaximumHeight(300)
+        self.backtest_comp_table.horizontalHeader().setStretchLastSection(True)
+        box.addWidget(self.backtest_comp_table)
+
+        self.backtest_methodology = QLabel("")
+        self.backtest_methodology.setWordWrap(True)
+        self.backtest_methodology.setStyleSheet("color:#94A9C7;padding:6px")
+        box.addWidget(self.backtest_methodology)
+
         refresh = QPushButton("Refresh performance")
         refresh.clicked.connect(self.refresh_performance)
         box.addWidget(refresh)
         self.refresh_performance()
         return page
+
+    def run_historical_backtest_ui(self):
+        if getattr(self, "backtest_worker", None) and self.backtest_worker.isRunning():
+            return
+        self.backtest_button.setEnabled(False)
+        self.backtest_status.setText("Backtest running against the local historical database. You can leave this tab open; the app remains responsive.")
+        self.backtest_worker = HistoricalBacktestWorker(
+            self.store.path,
+            self.backtest_from_year.value(),
+            self.backtest_min_history.value(),
+        )
+        self.backtest_worker.completed.connect(self.display_historical_backtest)
+        self.backtest_worker.failed.connect(self.historical_backtest_failed)
+        self.backtest_worker.finished.connect(lambda: self.backtest_button.setEnabled(True))
+        self.backtest_worker.start()
+
+    def historical_backtest_failed(self, message):
+        self.backtest_status.setText("Backtest failed: " + message)
+        QMessageBox.warning(self, "Historical backtest", message)
+
+    def display_historical_backtest(self, result):
+        self.backtest_source_card.value_label.setText(str(result.get("source_completed_matches", 0)))
+        self.backtest_evaluated_card.value_label.setText(str(result.get("evaluated_matches", 0)))
+        self.backtest_skipped_card.value_label.setText(str(result.get("skipped_insufficient_history", 0)))
+        accuracy = result.get("accuracy_1x2")
+        self.backtest_accuracy_card.value_label.setText(f"{accuracy:.1%}" if accuracy is not None else "—")
+        if not result.get("evaluated_matches"):
+            self.backtest_status.setText(result.get("message", "No matches could be evaluated."))
+            self.backtest_comparison.setText("No 1X2 comparison is available.")
+            self.backtest_market_table.setRowCount(0)
+            self.backtest_comp_table.setRowCount(0)
+            self.backtest_methodology.setText(result.get("methodology", ""))
+            return
+
+        model_brier = result["brier_score_1x2"]
+        baseline_brier = result["baseline_brier_score_1x2"]
+        model_loss = result["log_loss_1x2"]
+        baseline_loss = result["baseline_log_loss_1x2"]
+        brier_read = "better" if model_brier < baseline_brier else ("equal to" if model_brier == baseline_brier else "worse than")
+        loss_read = "better" if model_loss < baseline_loss else ("equal to" if model_loss == baseline_loss else "worse than")
+        self.backtest_comparison.setText(
+            f"Model Brier: {model_brier:.4f} ({brier_read} baseline {baseline_brier:.4f}). "
+            f"Model log loss: {model_loss:.4f} ({loss_read} baseline {baseline_loss:.4f}). "
+            "Lower Brier and log loss are better."
+        )
+        self.backtest_status.setText(
+            f"Completed: {result['evaluated_matches']:,} historical matches evaluated from {result['from_year']} onward. "
+            f"Corner-market predictions graded: {result.get('corner_market_predictions', 0):,}. "
+            "The imported database was read only."
+        )
+
+        markets = result.get("by_market", {})
+        self.backtest_market_table.setRowCount(len(markets))
+        for row, (name, stats) in enumerate(sorted(markets.items())):
+            values = [
+                name, stats["graded"], stats["correct"],
+                f"{stats['accuracy']:.1%}" if stats.get("accuracy") is not None else "—",
+                f"{stats['brier_score']:.4f}" if stats.get("brier_score") is not None else "—",
+            ]
+            for column, value in enumerate(values):
+                self.backtest_market_table.setItem(row, column, QTableWidgetItem(str(value)))
+
+        groups = result.get("by_competition_season", [])
+        self.backtest_comp_table.setRowCount(len(groups))
+        for row, stats in enumerate(groups):
+            values = [
+                stats["competition_season"], stats["matches"], f"{stats['accuracy']:.1%}",
+                f"{stats['brier_score']:.4f}", f"{stats['baseline_brier_score']:.4f}",
+                f"{stats['log_loss']:.4f}", f"{stats['baseline_log_loss']:.4f}",
+            ]
+            for column, value in enumerate(values):
+                self.backtest_comp_table.setItem(row, column, QTableWidgetItem(str(value)))
+        self.backtest_methodology.setText(result.get("methodology", ""))
 
     def refresh_performance(self):
         if not hasattr(self, "market_performance_table"):
