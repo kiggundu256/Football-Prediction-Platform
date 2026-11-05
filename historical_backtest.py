@@ -109,7 +109,6 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     # Grouping by date ensures a fixture cannot use another result from the same day.
     for match_date in sorted(daily_groups):
         day_rows = daily_groups[match_date]
-        pending_history = []
         for row in day_rows:
             home_key, away_key = _team_key(row["home_team"]), _team_key(row["away_team"])
             if not home_key or not away_key or home_key == away_key:
@@ -193,8 +192,6 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 except (TypeError, ValueError, KeyError):
                     pass
 
-            pending_history.append((home_key, away_key, row, corner_data))
-
             if max_matches is not None and evaluated >= int(max_matches):
                 break
 
@@ -205,7 +202,14 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             actual_outcome = 0 if actual_home > actual_away else (2 if actual_home < actual_away else 1)
             league_outcomes[league_key][actual_outcome] += 1
 
-        for home_key, away_key, row, corner_data in pending_history:
+        for row in day_rows:
+            home_key, away_key = _team_key(row["home_team"]), _team_key(row["away_team"])
+            if not home_key or not away_key or home_key == away_key:
+                continue
+            try:
+                corner_data = json.loads(row["stats_json"] or "{}")
+            except (TypeError, ValueError):
+                corner_data = {}
             try:
                 hc, ac = corner_data.get("home_corners"), corner_data.get("away_corners")
                 hc = float(hc) if hc is not None else None
