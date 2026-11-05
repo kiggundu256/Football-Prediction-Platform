@@ -90,7 +90,7 @@ def summarize_performance(records):
                 loss = -log(max(probs[actual], 1e-15))
                 brier_values.append(brier)
                 log_losses.append(loss)
-                calibration_samples.append((max(probs), probs[actual] >= max(probs) - 1e-12))
+                calibration_samples.append((max(probs), probs.index(max(probs)) == actual))
                 day["brier_sum"] += brier
                 day["brier_count"] += 1
                 day["log_loss_sum"] += loss
