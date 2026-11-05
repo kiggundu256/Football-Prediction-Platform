@@ -48,12 +48,14 @@ def _corner_averages(history):
     )
 
 
-def _market_add(stats, name, predicted, actual, probability=None):
+def _market_add(stats, name, predicted, actual, probability=None, brier_value=None):
     item = stats.setdefault(name, {"graded": 0, "correct": 0, "brier_sum": 0.0})
     item["graded"] += 1
     correct = bool(predicted == actual)
     item["correct"] += int(correct)
-    if probability is not None:
+    if brier_value is not None:
+        item["brier_sum"] += float(brier_value)
+    elif probability is not None:
         p = max(0.0, min(1.0, float(probability)))
         item["brier_sum"] += (p - float(bool(actual))) ** 2
 
@@ -157,7 +159,10 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             log_loss_sum += model_loss
             baseline_brier_sum += baseline_brier
             baseline_log_loss_sum += baseline_loss
-            _market_add(market_stats, "1X2", predicted_outcome, actual_outcome)
+            _market_add(
+                market_stats, "1X2", predicted_outcome, actual_outcome,
+                brier_value=model_brier,
+            )
 
             total_goals = actual_home + actual_away
             for line in (1.5, 2.5, 3.5):
@@ -239,13 +244,25 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     groups = []
     for name, item in sorted(by_competition.items()):
         n = item["matches"]
+        model_brier = item["model_brier_sum"] / n
+        baseline_brier = item["baseline_brier_sum"] / n
+        model_loss = item["model_log_loss_sum"] / n
+        baseline_loss = item["baseline_log_loss_sum"] / n
+        brier_better = model_brier < baseline_brier
+        loss_better = model_loss < baseline_loss
+        assessment = (
+            "Beats baseline" if brier_better and loss_better else
+            "Needs attention" if not brier_better and not loss_better else
+            "Mixed results"
+        )
         groups.append({
             "competition_season": name, "matches": n,
             "accuracy": item["model_correct"] / n,
-            "brier_score": item["model_brier_sum"] / n,
-            "log_loss": item["model_log_loss_sum"] / n,
-            "baseline_brier_score": item["baseline_brier_sum"] / n,
-            "baseline_log_loss": item["baseline_log_loss_sum"] / n,
+            "brier_score": model_brier,
+            "log_loss": model_loss,
+            "baseline_brier_score": baseline_brier,
+            "baseline_log_loss": baseline_loss,
+            "assessment": assessment,
         })
 
     return {
