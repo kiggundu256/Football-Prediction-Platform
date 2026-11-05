@@ -58,6 +58,13 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("1X2", result["by_market"])
         self.assertIn("Over 2.5", result["by_market"])
         self.assertGreater(result["brier_score_1x2"], 0)
+        self.assertGreater(result["by_market"]["1X2"]["brier_score"], 0)
+        self.assertAlmostEqual(
+            result["by_market"]["1X2"]["brier_score"],
+            result["brier_score_1x2"],
+            places=10,
+        )
+        self.assertIn("assessment", result["by_competition_season"][0])
         self.assertIn("by_competition_season", result)
 
     def test_corner_markets_are_only_graded_with_prior_corner_history(self):
