@@ -214,9 +214,10 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                                    for sh, sa, _ in normalized_scores)
                     score_top1_correct += int(top1_hit)
                     score_top5_correct += int(top5_hit)
-                    _market_add(market_stats, "Correct score (top 1)",
-                                (top_score[0], top_score[1]),
-                                (actual_home, actual_away), top_score[2])
+                    _market_add(
+                        market_stats, "Correct score (top 1)", top1_hit, True,
+                        brier_value=(top_score[2] - float(top1_hit)) ** 2,
+                    )
 
             total_goals = actual_home + actual_away
             for line in (1.5, 2.5, 3.5):
