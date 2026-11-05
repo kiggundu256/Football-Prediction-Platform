@@ -72,6 +72,33 @@ def _finalize_market_stats(stats):
     return output
 
 
+def _calibration_bins(samples, bin_count=10):
+    """Reliability bins for a probability assigned to a binary event."""
+    bins = [{"lower": i / bin_count, "upper": (i + 1) / bin_count,
+             "count": 0, "probability_sum": 0.0, "observed_sum": 0}
+            for i in range(bin_count)]
+    for probability, observed in samples:
+        p = max(0.0, min(1.0, float(probability)))
+        index = min(bin_count - 1, int(p * bin_count))
+        item = bins[index]
+        item["count"] += 1
+        item["probability_sum"] += p
+        item["observed_sum"] += int(bool(observed))
+    return [{
+        "range": f"{item['lower']:.1f}-{item['upper']:.1f}",
+        "count": item["count"],
+        "mean_probability": item["probability_sum"] / item["count"] if item["count"] else None,
+        "observed_rate": item["observed_sum"] / item["count"] if item["count"] else None,
+        "absolute_gap": abs(item["probability_sum"] / item["count"] -
+                            item["observed_sum"] / item["count"]) if item["count"] else None,
+    } for item in bins]
+
+
+def _multiclass_calibration(samples, bin_count=10):
+    """Calibration of the most likely 1X2 outcome, not three independent events."""
+    return _calibration_bins(samples, bin_count)
+
+
 def run_historical_backtest(database_path, from_year=2020, minimum_history=5, max_matches=None):
     """Run a chronological backtest against completed local historical matches."""
     if int(minimum_history) < 1:
@@ -100,6 +127,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         "baseline_log_loss_sum": 0.0,
     })
     market_stats = {}
+    calibration_samples = defaultdict(list)
+    score_top1_correct = score_top5_correct = score_graded = 0
     corner_graded = 0
     skipped_insufficient_history = 0
     evaluated = 0
@@ -163,15 +192,43 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 market_stats, "1X2", predicted_outcome, actual_outcome,
                 brier_value=model_brier,
             )
+            calibration_samples["1X2 most-likely outcome"].append(
+                (max(probabilities), predicted_outcome == actual_outcome)
+            )
+
+            # Correct-score evaluation uses the unchanged Poisson score matrix.
+            score_candidates = markets.get("top_scores") or []
+            if score_candidates:
+                normalized_scores = []
+                for candidate in score_candidates:
+                    try:
+                        sh, sa, sp = candidate
+                        normalized_scores.append((int(sh), int(sa), float(sp)))
+                    except (TypeError, ValueError):
+                        continue
+                if normalized_scores:
+                    score_graded += 1
+                    top_score = max(normalized_scores, key=lambda item: item[2])
+                    top1_hit = (top_score[0], top_score[1]) == (actual_home, actual_away)
+                    top5_hit = any((sh, sa) == (actual_home, actual_away)
+                                   for sh, sa, _ in normalized_scores)
+                    score_top1_correct += int(top1_hit)
+                    score_top5_correct += int(top5_hit)
+                    _market_add(market_stats, "Correct score (top 1)",
+                                (top_score[0], top_score[1]),
+                                (actual_home, actual_away), top_score[2])
 
             total_goals = actual_home + actual_away
             for line in (1.5, 2.5, 3.5):
                 probability = float(markets["over"][str(line)])
                 actual_over = total_goals > line
                 _market_add(market_stats, f"Over {line}", probability >= 0.5, actual_over, probability)
+                calibration_samples[f"Over {line}"].append((probability, actual_over))
             btts_probability = float(markets["btts_yes"])
+            actual_btts = actual_home > 0 and actual_away > 0
             _market_add(market_stats, "BTTS Yes", btts_probability >= 0.5,
-                        actual_home > 0 and actual_away > 0, btts_probability)
+                        actual_btts, btts_probability)
+            calibration_samples["BTTS Yes"].append((btts_probability, actual_btts))
 
             try:
                 corner_data = json.loads(row["stats_json"] or "{}")
@@ -191,9 +248,23 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                     actual_total_corners = float(home_corners) + float(away_corners)
                     for line in (7.5, 8.5, 9.5, 10.5, 11.5):
                         probability = float(corner_forecast["over"][str(float(line))])
-                        _market_add(market_stats, f"Corners Over {line}",
-                                    probability >= 0.5, actual_total_corners > line, probability)
+                        actual_over = actual_total_corners > line
+                        name = f"Corners Over {line}"
+                        _market_add(market_stats, name, probability >= 0.5, actual_over, probability)
+                        calibration_samples[name].append((probability, actual_over))
                         corner_graded += 1
+                    for prefix, observed, forecast_key in (
+                        ("Home team corners", float(home_corners), "home_over"),
+                        ("Away team corners", float(away_corners), "away_over"),
+                    ):
+                        for line in (2.5, 3.5, 4.5, 5.5, 6.5, 7.5):
+                            probability = float(corner_forecast[forecast_key][str(float(line))])
+                            actual_over = observed > line
+                            name = f"{prefix} Over {line}"
+                            _market_add(market_stats, name, probability >= 0.5,
+                                        actual_over, probability)
+                            calibration_samples[name].append((probability, actual_over))
+                            corner_graded += 1
                 except (TypeError, ValueError, KeyError):
                     pass
 
@@ -239,6 +310,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "skipped_insufficient_history": skipped_insufficient_history,
             "message": "No matches had enough prior team history to evaluate.",
             "by_market": {}, "by_competition_season": [],
+            "calibration_by_market": {}, "correct_score": {"graded": 0, "top1_accuracy": None, "top5_coverage": None},
         }
 
     groups = []
@@ -275,6 +347,16 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         "baseline_brier_score_1x2": baseline_brier_sum / evaluated,
         "baseline_log_loss_1x2": baseline_log_loss_sum / evaluated,
         "corner_market_predictions": corner_graded,
+        "correct_score": {
+            "graded": score_graded,
+            "top1_correct": score_top1_correct,
+            "top5_correct": score_top5_correct,
+            "top1_accuracy": score_top1_correct / score_graded if score_graded else None,
+            "top5_coverage": score_top5_correct / score_graded if score_graded else None,
+        },
+        "calibration_by_market": {
+            name: _calibration_bins(samples) for name, samples in sorted(calibration_samples.items())
+        },
         "by_market": _finalize_market_stats(market_stats),
         "by_competition_season": groups,
         "methodology": (
