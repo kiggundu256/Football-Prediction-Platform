@@ -3137,10 +3137,10 @@ class MainWindow(QMainWindow):
         backtest_comp_title = QLabel("Performance by competition and season")
         backtest_comp_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
         box.addWidget(backtest_comp_title)
-        self.backtest_comp_table = QTableWidget(0, 7)
+        self.backtest_comp_table = QTableWidget(0, 8)
         self.backtest_comp_table.setHorizontalHeaderLabels([
             "Competition / season", "Matches", "1X2 accuracy", "Model Brier",
-            "Baseline Brier", "Model log loss", "Baseline log loss"
+            "Baseline Brier", "Model log loss", "Baseline log loss", "Assessment"
         ])
         self.backtest_comp_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.backtest_comp_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
@@ -3148,6 +3148,14 @@ class MainWindow(QMainWindow):
         self.backtest_comp_table.setMaximumHeight(300)
         self.backtest_comp_table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.backtest_comp_table)
+
+        self.backtest_comp_summary = QLabel(
+            "Strong and weak competition summaries will appear here after the backtest. "
+            "Only competition-seasons with at least 100 evaluated matches are highlighted."
+        )
+        self.backtest_comp_summary.setWordWrap(True)
+        self.backtest_comp_summary.setStyleSheet("color:#C7D7EF;padding:6px")
+        box.addWidget(self.backtest_comp_summary)
 
         self.backtest_methodology = QLabel("")
         self.backtest_methodology.setWordWrap(True)
@@ -3216,6 +3224,9 @@ class MainWindow(QMainWindow):
             "PERFORMANCE BY COMPETITION AND SEASON",
             table_text(self.backtest_comp_table),
             "",
+            "STRONG / WEAK COMPETITION SUMMARY",
+            self.backtest_comp_summary.text(),
+            "",
             "METHODOLOGY",
             self.backtest_methodology.text(),
         ]
@@ -3236,6 +3247,7 @@ class MainWindow(QMainWindow):
             self.backtest_comparison.setText("No 1X2 comparison is available.")
             self.backtest_market_table.setRowCount(0)
             self.backtest_comp_table.setRowCount(0)
+            self.backtest_comp_summary.setText("No competition-season results are available.")
             self.backtest_methodology.setText(result.get("methodology", ""))
             return
 
@@ -3274,9 +3286,45 @@ class MainWindow(QMainWindow):
                 stats["competition_season"], stats["matches"], f"{stats['accuracy']:.1%}",
                 f"{stats['brier_score']:.4f}", f"{stats['baseline_brier_score']:.4f}",
                 f"{stats['log_loss']:.4f}", f"{stats['baseline_log_loss']:.4f}",
+                stats.get("assessment", "—"),
             ]
             for column, value in enumerate(values):
                 self.backtest_comp_table.setItem(row, column, QTableWidgetItem(str(value)))
+
+        # Highlight only reasonably sized groups; keep every group visible in the table.
+        eligible = [item for item in groups if int(item.get("matches", 0)) >= 100]
+        strong = sorted(
+            [item for item in eligible if item.get("assessment") == "Beats baseline"],
+            key=lambda item: (
+                item["brier_score"] - item["baseline_brier_score"],
+                item["log_loss"] - item["baseline_log_loss"],
+            ),
+        )[:5]
+        weak = sorted(
+            [item for item in eligible if item.get("assessment") == "Needs attention"],
+            key=lambda item: (
+                item["brier_score"] - item["baseline_brier_score"],
+                item["log_loss"] - item["baseline_log_loss"],
+            ),
+            reverse=True,
+        )[:5]
+        strong_text = "; ".join(
+            f"{item['competition_season']} ({item['matches']} matches, "
+            f"{item['accuracy']:.1%} accuracy)"
+            for item in strong
+        ) or "No competition-season beat the baseline on both metrics."
+        weak_text = "; ".join(
+            f"{item['competition_season']} ({item['matches']} matches, "
+            f"{item['accuracy']:.1%} accuracy)"
+            for item in weak
+        ) or "No competition-season was worse than the baseline on both metrics."
+        mixed_count = sum(1 for item in eligible if item.get("assessment") == "Mixed results")
+        self.backtest_comp_summary.setText(
+            f"STRONGEST (beats baseline on both Brier and log loss): {strong_text}\\n"
+            f"NEEDS ATTENTION (worse on both): {weak_text}\\n"
+            f"Mixed results: {mixed_count} competition-seasons. "
+            "Highlights require at least 100 evaluated matches; all sample sizes remain visible above."
+        )
         self.backtest_methodology.setText(result.get("methodology", ""))
 
     def refresh_performance(self):
