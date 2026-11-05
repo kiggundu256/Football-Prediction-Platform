@@ -54,8 +54,16 @@ def inspect_data_quality(database_path, from_year=2022, sample_limit=200):
             missing_team.append(row)
         if row.get("season") is None:
             missing_season.append(row)
-        elif match_day and (int(row["season"]) > match_day.year or int(row["season"]) < match_day.year - 1):
-            suspicious_season.append(row)
+        elif match_day:
+            # Historical sources encode a season as either its starting year
+            # (2020 for 2020/21) or its ending year (2021 for 2020/21).
+            # Accept both conventions around the match calendar year.
+            try:
+                season_year = int(str(row["season"]).strip()[:4])
+                if season_year < match_day.year - 1 or season_year > match_day.year + 1:
+                    suspicious_season.append(row)
+            except (TypeError, ValueError):
+                suspicious_season.append(row)
 
         hg, ag = row.get("home_goals"), row.get("away_goals")
         completed = str(row.get("status") or "").upper() in {"FT", "AET", "PEN"}
