@@ -40,6 +40,12 @@ class PerformanceMetricsTests(unittest.TestCase):
         self.assertAlmostEqual(result["brier_score"], (0.2**2 + 0.1**2 + 0.1**2) / 3)
         self.assertAlmostEqual(result["log_loss"], -__import__("math").log(0.8))
         self.assertEqual(result["by_model"]["test-model"]["matches"], 1)
+        self.assertEqual(result["probability_calibration"]["graded"], 1)
+        self.assertEqual(len(result["probability_calibration"]["bins"]), 10)
+        occupied = [item for item in result["probability_calibration"]["bins"] if item["count"]]
+        self.assertEqual(len(occupied), 1)
+        self.assertAlmostEqual(occupied[0]["mean_probability"], 0.8)
+        self.assertEqual(occupied[0]["observed_rate"], 1.0)
 
     def test_handles_empty_or_invalid_outcome_records(self):
         result = summarize_performance([
