@@ -3075,6 +3075,25 @@ class MainWindow(QMainWindow):
         self.model_performance_table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.model_performance_table)
 
+        calibration_title = QLabel("Saved prediction probability calibration")
+        calibration_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
+        box.addWidget(calibration_title)
+        self.probability_calibration_table = QTableWidget(0, 5)
+        self.probability_calibration_table.setHorizontalHeaderLabels([
+            "Predicted confidence", "Predictions", "Average confidence", "Observed accuracy", "Calibration gap"
+        ])
+        self.probability_calibration_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.probability_calibration_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self.probability_calibration_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.probability_calibration_table.horizontalHeader().setStretchLastSection(True)
+        box.addWidget(self.probability_calibration_table)
+        self.probability_calibration_note = QLabel(
+            "A well-calibrated 70% confidence group should be correct about 70% of the time. "
+            "Empty bins mean there are no saved predictions in that confidence range."
+        )
+        self.probability_calibration_note.setWordWrap(True)
+        box.addWidget(self.probability_calibration_note)
+
         backtest_title = QLabel("Historical walk-forward backtest")
         backtest_title.setStyleSheet("font-size:17px;font-weight:800;color:#EAF2FF;margin-top:12px")
         box.addWidget(backtest_title)
@@ -3119,6 +3138,19 @@ class MainWindow(QMainWindow):
         self.backtest_comparison = QLabel("1X2 probability quality vs the prior-results competition baseline: —")
         self.backtest_comparison.setWordWrap(True)
         box.addWidget(self.backtest_comparison)
+        backtest_model_title = QLabel("Historical model component comparison")
+        backtest_model_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
+        box.addWidget(backtest_model_title)
+        self.backtest_model_table = QTableWidget(0, 5)
+        self.backtest_model_table.setHorizontalHeaderLabels([
+            "Model component", "Matches", "1X2 accuracy", "Brier score", "Log loss"
+        ])
+        self.backtest_model_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.backtest_model_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self.backtest_model_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.backtest_model_table.setMaximumHeight(180)
+        self.backtest_model_table.horizontalHeader().setStretchLastSection(True)
+        box.addWidget(self.backtest_model_table)
 
         backtest_market_title = QLabel("Historical market performance")
         backtest_market_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
@@ -3133,6 +3165,23 @@ class MainWindow(QMainWindow):
         self.backtest_market_table.setMaximumHeight(220)
         self.backtest_market_table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.backtest_market_table)
+
+        self.backtest_score_summary = QLabel("Correct-score top-1 and top-5 coverage: —")
+        self.backtest_score_summary.setWordWrap(True)
+        box.addWidget(self.backtest_score_summary)
+        backtest_calibration_title = QLabel("Historical probability calibration")
+        backtest_calibration_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
+        box.addWidget(backtest_calibration_title)
+        self.backtest_calibration_table = QTableWidget(0, 5)
+        self.backtest_calibration_table.setHorizontalHeaderLabels([
+            "Market / event", "Confidence range", "Graded", "Average probability", "Observed rate"
+        ])
+        self.backtest_calibration_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.backtest_calibration_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self.backtest_calibration_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.backtest_calibration_table.setMaximumHeight(320)
+        self.backtest_calibration_table.horizontalHeader().setStretchLastSection(True)
+        box.addWidget(self.backtest_calibration_table)
 
         backtest_comp_title = QLabel("Performance by competition and season")
         backtest_comp_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
@@ -3169,6 +3218,8 @@ class MainWindow(QMainWindow):
         refresh = QPushButton("Refresh performance")
         refresh.clicked.connect(self.refresh_performance)
         box.addWidget(refresh)
+        for table in page.findChildren(QTableWidget):
+            enable_table_copy(table)
         self.refresh_performance()
         return page
 
@@ -3218,8 +3269,17 @@ class MainWindow(QMainWindow):
             f"Skipped matches: {self.backtest_skipped_card.value_label.text()}",
             self.backtest_comparison.text(),
             "",
+            "HISTORICAL MODEL COMPONENT COMPARISON",
+            table_text(self.backtest_model_table),
+            "",
             "HISTORICAL MARKET PERFORMANCE",
             table_text(self.backtest_market_table),
+            "",
+            "CORRECT SCORE COVERAGE",
+            self.backtest_score_summary.text(),
+            "",
+            "HISTORICAL PROBABILITY CALIBRATION",
+            table_text(self.backtest_calibration_table),
             "",
             "PERFORMANCE BY COMPETITION AND SEASON",
             table_text(self.backtest_comp_table),
@@ -3246,6 +3306,9 @@ class MainWindow(QMainWindow):
             self.backtest_status.setText(result.get("message", "No matches could be evaluated."))
             self.backtest_comparison.setText("No 1X2 comparison is available.")
             self.backtest_market_table.setRowCount(0)
+            self.backtest_model_table.setRowCount(0)
+            self.backtest_calibration_table.setRowCount(0)
+            self.backtest_score_summary.setText("Correct-score coverage is unavailable.")
             self.backtest_comp_table.setRowCount(0)
             self.backtest_comp_summary.setText("No competition-season results are available.")
             self.backtest_methodology.setText(result.get("methodology", ""))
@@ -3262,11 +3325,50 @@ class MainWindow(QMainWindow):
             f"Model log loss: {model_loss:.4f} ({loss_read} baseline {baseline_loss:.4f}). "
             "Lower Brier and log loss are better."
         )
+        score_stats = result.get("correct_score", {})
+        score_top1 = score_stats.get("top1_accuracy")
+        score_top5 = score_stats.get("top5_coverage")
+        self.backtest_score_summary.setText(
+            f"Correct-score matches graded: {score_stats.get('graded', 0):,}. "
+            f"Exact top-1 accuracy: {score_top1:.1%}." if score_top1 is not None else
+            f"Correct-score matches graded: {score_stats.get('graded', 0):,}. Exact top-1 accuracy: unavailable."
+        )
+        self.backtest_score_summary.setText(
+            self.backtest_score_summary.text() +
+            (f" Top-5 score coverage: {score_top5:.1%}." if score_top5 is not None else
+             " Top-5 score coverage: unavailable.")
+        )
         self.backtest_status.setText(
             f"Completed: {result['evaluated_matches']:,} historical matches evaluated from {result['from_year']} onward. "
-            f"Corner-market predictions graded: {result.get('corner_market_predictions', 0):,}. "
+            f"Corner market selections graded: {result.get('corner_market_predictions', 0):,}. "
             "The imported database was read only."
         )
+
+        model_rows = result.get("by_model", [])
+        self.backtest_model_table.setRowCount(len(model_rows))
+        for row, stats in enumerate(model_rows):
+            values = [
+                stats["model"], stats["matches"],
+                f"{stats['accuracy']:.1%}" if stats.get("accuracy") is not None else "—",
+                f"{stats['brier_score']:.4f}" if stats.get("brier_score") is not None else "—",
+                f"{stats['log_loss']:.4f}" if stats.get("log_loss") is not None else "—",
+            ]
+            for column, value in enumerate(values):
+                self.backtest_model_table.setItem(row, column, QTableWidgetItem(str(value)))
+
+        calibration_rows = []
+        for market_name, bins in result.get("calibration_by_market", {}).items():
+            for item in bins:
+                if item.get("count", 0):
+                    calibration_rows.append((
+                        market_name, item["range"], item["count"],
+                        f"{item['mean_probability']:.1%}",
+                        f"{item['observed_rate']:.1%}",
+                    ))
+        self.backtest_calibration_table.setRowCount(len(calibration_rows))
+        for row, values in enumerate(calibration_rows):
+            for column, value in enumerate(values):
+                self.backtest_calibration_table.setItem(row, column, QTableWidgetItem(str(value)))
 
         markets = result.get("by_market", {})
         self.backtest_market_table.setRowCount(len(markets))
@@ -3360,6 +3462,27 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 self.daily_performance_table.setItem(row, column, QTableWidgetItem(str(value)))
+
+        calibration = summary.get("probability_calibration", {})
+        calibration_bins = calibration.get("bins", [])
+        self.probability_calibration_table.setRowCount(len(calibration_bins))
+        for row, item in enumerate(calibration_bins):
+            values = [
+                item["range"], item["count"],
+                f"{item['mean_probability']:.1%}" if item.get("mean_probability") is not None else "—",
+                f"{item['observed_rate']:.1%}" if item.get("observed_rate") is not None else "—",
+                f"{item['absolute_gap']:.1%}" if item.get("absolute_gap") is not None else "—",
+            ]
+            for column, value in enumerate(values):
+                self.probability_calibration_table.setItem(row, column, QTableWidgetItem(str(value)))
+        ece = calibration.get("expected_calibration_error")
+        self.probability_calibration_note.setText(
+            "A well-calibrated 70% confidence group should be correct about 70% of the time. "
+            f"Current expected calibration error: {ece:.1%} across {calibration.get('graded', 0):,} saved predictions."
+            if ece is not None else
+            "A well-calibrated 70% confidence group should be correct about 70% of the time. "
+            "No saved 1X2 probabilities are available yet."
+        )
 
         model_rows = sorted(summary.get("by_model", {}).items())
         self.model_performance_table.setRowCount(len(model_rows))

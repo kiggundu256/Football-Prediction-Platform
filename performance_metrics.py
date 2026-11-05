@@ -3,6 +3,38 @@ import json
 from math import log
 
 
+def _calibration_summary(samples, bin_count=10):
+    bins = [{"lower": i / bin_count, "upper": (i + 1) / bin_count,
+             "count": 0, "probability_sum": 0.0, "correct_sum": 0}
+            for i in range(bin_count)]
+    for probability, correct in samples:
+        probability = max(0.0, min(1.0, float(probability)))
+        index = min(bin_count - 1, int(probability * bin_count))
+        bins[index]["count"] += 1
+        bins[index]["probability_sum"] += probability
+        bins[index]["correct_sum"] += int(bool(correct))
+    output = []
+    weighted_gap = 0.0
+    total = len(samples)
+    for item in bins:
+        count = item["count"]
+        mean_probability = item["probability_sum"] / count if count else None
+        observed_rate = item["correct_sum"] / count if count else None
+        gap = abs(mean_probability - observed_rate) if count else None
+        if count:
+            weighted_gap += gap * count
+        output.append({
+            "range": f"{item['lower']:.1f}-{item['upper']:.1f}",
+            "count": count, "mean_probability": mean_probability,
+            "observed_rate": observed_rate, "absolute_gap": gap,
+        })
+    return {
+        "bins": output,
+        "expected_calibration_error": weighted_gap / total if total else None,
+        "graded": total,
+    }
+
+
 def summarize_performance(records):
     """Summarize market accuracy and 1X2 probability quality.
 
@@ -14,6 +46,7 @@ def summarize_performance(records):
     settled_count = 0
     brier_values, log_losses = [], []
     by_model = {}
+    calibration_samples = []
 
     for record in records:
         created_at, status, outcomes_json = record[:3]
@@ -57,6 +90,7 @@ def summarize_performance(records):
                 loss = -log(max(probs[actual], 1e-15))
                 brier_values.append(brier)
                 log_losses.append(loss)
+                calibration_samples.append((max(probs), probs.index(max(probs)) == actual))
                 day["brier_sum"] += brier
                 day["brier_count"] += 1
                 day["log_loss_sum"] += loss
@@ -91,4 +125,5 @@ def summarize_performance(records):
         "by_market": market_stats,
         "by_day": daily_stats,
         "by_model": by_model,
+        "probability_calibration": _calibration_summary(calibration_samples),
     }

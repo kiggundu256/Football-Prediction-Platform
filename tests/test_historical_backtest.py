@@ -56,7 +56,17 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertEqual(result["evaluated_matches"], 2)
         self.assertEqual(result["skipped_insufficient_history"], 5)
         self.assertIn("1X2", result["by_market"])
+        self.assertEqual(
+            {item["model"] for item in result["by_model"]},
+            {"Goal distribution", "Recent form", "Ensemble"},
+        )
+        for item in result["by_model"]:
+            self.assertEqual(item["matches"], 2)
+            self.assertIsNotNone(item["brier_score"])
+            self.assertIsNotNone(item["log_loss"])
         self.assertIn("Over 2.5", result["by_market"])
+        self.assertIn("Under 2.5", result["by_market"])
+        self.assertIn("BTTS No", result["by_market"])
         self.assertGreater(result["brier_score_1x2"], 0)
         self.assertGreater(result["by_market"]["1X2"]["brier_score"], 0)
         self.assertAlmostEqual(
@@ -71,6 +81,15 @@ class HistoricalBacktestTests(unittest.TestCase):
         result = run_historical_backtest(self.path, from_year=2020, minimum_history=5)
         self.assertGreater(result["corner_market_predictions"], 0)
         self.assertIn("Corners Over 9.5", result["by_market"])
+        self.assertIn("Corners Under 9.5", result["by_market"])
+        self.assertIn("Home team corners Over 4.5", result["by_market"])
+        self.assertIn("Away team corners Over 4.5", result["by_market"])
+        self.assertIn("Home team corners Under 4.5", result["by_market"])
+        self.assertIn("Away team corners Under 4.5", result["by_market"])
+        self.assertGreater(result["correct_score"]["graded"], 0)
+        self.assertIn("Correct score (top 1)", result["by_market"])
+        self.assertIn("1X2 most-likely outcome", result["calibration_by_market"])
+        self.assertEqual(len(result["calibration_by_market"]["1X2 most-likely outcome"]), 10)
 
     def test_no_evaluation_when_prior_history_is_insufficient(self):
         result = run_historical_backtest(self.path, from_year=2020, minimum_history=6)
