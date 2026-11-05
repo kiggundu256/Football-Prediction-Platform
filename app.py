@@ -37,6 +37,7 @@ from fixture_view import filter_fixtures, competition_options, fixture_status_gr
 from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
 from csv_historical_importer import (HistoricalCsvImporter, scan_csv_folder, inspect_csv_file, _stable_id, _season_start)
 from historical_reconciliation import HistoricalReconciliation
+from data_quality import inspect_data_quality
 from player_intelligence import PlayerIntelligenceDatabase
 
 APP_NAME = "Football Prediction Platform"
@@ -606,6 +607,67 @@ class MainWindow(QMainWindow):
         )
         intro.setWordWrap(True)
         box.addWidget(intro)
+
+        quality_heading = QLabel("DATA INTEGRITY & COVERAGE  •  JANUARY 2022 ONWARD")
+        quality_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
+        box.addWidget(quality_heading)
+        quality_note = QLabel(
+            "Run a read-only scan of the local match database. It checks duplicate match identities, "
+            "missing or invalid results, suspicious season/date combinations, and actual league-season coverage. "
+            "No records are changed or deleted."
+        )
+        quality_note.setWordWrap(True)
+        box.addWidget(quality_note)
+        quality_actions = QHBoxLayout()
+        self.run_data_quality_button = QPushButton("Run Data Integrity Scan")
+        self.run_data_quality_button.clicked.connect(self.run_data_quality_scan)
+        quality_actions.addWidget(self.run_data_quality_button)
+        self.data_quality_summary = QLabel("Run the scan to inspect stored records from January 2022 onward.")
+        self.data_quality_summary.setWordWrap(True)
+        quality_actions.addWidget(self.data_quality_summary, 1)
+        box.addLayout(quality_actions)
+
+        self.data_quality_issues_table = QTableWidget(0, 3)
+        self.data_quality_issues_table.setHorizontalHeaderLabels(["Integrity check", "Records / groups", "What it means"])
+        self.data_quality_issues_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.data_quality_issues_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.data_quality_issues_table.horizontalHeader().setStretchLastSection(True)
+        self.data_quality_issues_table.setMaximumHeight(230)
+        enable_table_copy(self.data_quality_issues_table)
+        box.addWidget(self.data_quality_issues_table)
+
+        quality_coverage_heading = QLabel("VERIFIED HISTORICAL COVERAGE (2022+)")
+        quality_coverage_heading.setStyleSheet("font-size:14px;font-weight:700;color:#168BFF;margin-top:6px")
+        box.addWidget(quality_coverage_heading)
+        self.data_quality_coverage_table = QTableWidget(0, 9)
+        self.data_quality_coverage_table.setHorizontalHeaderLabels([
+            "Competition", "Country", "Season", "Matches", "Completed",
+            "Teams", "CSV", "API", "Date range"
+        ])
+        self.data_quality_coverage_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.data_quality_coverage_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.data_quality_coverage_table.horizontalHeader().setStretchLastSection(True)
+        self.data_quality_coverage_table.setMaximumHeight(260)
+        self.data_quality_coverage_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.data_quality_coverage_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        enable_table_copy(self.data_quality_coverage_table)
+        box.addWidget(self.data_quality_coverage_table)
+
+        duplicate_heading = QLabel("POTENTIAL DUPLICATE MATCHES  •  REVIEW BEFORE CLEANUP")
+        duplicate_heading.setStyleSheet("font-size:14px;font-weight:700;color:#168BFF;margin-top:6px")
+        box.addWidget(duplicate_heading)
+        self.data_quality_duplicates_table = QTableWidget(0, 7)
+        self.data_quality_duplicates_table.setHorizontalHeaderLabels([
+            "Competition", "Date", "Home", "Away", "Records", "Stored scores", "Fixture IDs"
+        ])
+        self.data_quality_duplicates_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.data_quality_duplicates_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.data_quality_duplicates_table.horizontalHeader().setStretchLastSection(True)
+        self.data_quality_duplicates_table.setMaximumHeight(220)
+        self.data_quality_duplicates_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.data_quality_duplicates_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        enable_table_copy(self.data_quality_duplicates_table)
+        box.addWidget(self.data_quality_duplicates_table)
         controls = QHBoxLayout()
         controls.addWidget(QLabel("Competition:"))
         self.library_competition = QComboBox()
@@ -806,6 +868,71 @@ class MainWindow(QMainWindow):
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setWidget(page)
         return scroll
+
+    def run_data_quality_scan(self):
+        """Display read-only integrity diagnostics for the local historical archive."""
+        if not hasattr(self, "data_quality_summary"):
+            return
+        self.run_data_quality_button.setEnabled(False)
+        self.run_data_quality_button.setText("Scanning…")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            report = inspect_data_quality(self.historical_db.path, from_year=2022)
+            self.data_quality_summary.setText(
+                f"Stored records: {report['total_records']:,}  •  "
+                f"2022+ records: {report['records_in_scope']:,}  •  "
+                f"Completed: {report['completed_matches']:,}  •  "
+                f"Competitions: {report['competitions']}  •  "
+                f"Competition-seasons: {report['competition_seasons']}  •  "
+                f"Before 2022 / invalid dates: {report['records_before_window_or_invalid_date']:,}"
+            )
+            issues = report["issues"]
+            self.data_quality_issues_table.setRowCount(len(issues))
+            for row_index, item in enumerate(issues):
+                values = [item["issue"], item["count"], item["detail"]]
+                for column, value in enumerate(values):
+                    self.data_quality_issues_table.setItem(
+                        row_index, column, QTableWidgetItem(str(value))
+                    )
+
+            coverage = report["coverage"]
+            self.data_quality_coverage_table.setRowCount(len(coverage))
+            for row_index, item in enumerate(coverage):
+                values = [
+                    item["competition"], item["country"] or "—", item["season"] or "—",
+                    item["matches"], item["completed"], item["teams"], item["csv"],
+                    item["api"], f"{item['date_from']} → {item['date_to']}",
+                ]
+                for column, value in enumerate(values):
+                    self.data_quality_coverage_table.setItem(
+                        row_index, column, QTableWidgetItem(str(value))
+                    )
+
+            duplicates = report["duplicate_samples"]
+            self.data_quality_duplicates_table.setRowCount(len(duplicates))
+            for row_index, item in enumerate(duplicates):
+                values = [
+                    item["competition"], item["date"], item["home_team"], item["away_team"],
+                    item["records"], item["scores"], item["fixture_ids"],
+                ]
+                for column, value in enumerate(values):
+                    self.data_quality_duplicates_table.setItem(
+                        row_index, column, QTableWidgetItem(str(value))
+                    )
+            if not duplicates:
+                self.data_quality_duplicates_table.setRowCount(1)
+                self.data_quality_duplicates_table.setItem(
+                    0, 0, QTableWidgetItem("No potential duplicate match identities found.")
+                )
+            self.data_quality_coverage_table.resizeColumnsToContents()
+            self.data_quality_issues_table.resizeColumnsToContents()
+            self.data_quality_duplicates_table.resizeColumnsToContents()
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Data integrity scan", f"Could not complete the scan: {exc}")
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.run_data_quality_button.setEnabled(True)
+            self.run_data_quality_button.setText("Run Data Integrity Scan")
 
     def refresh_data_library(self):
         if not hasattr(self, "library_table"):
