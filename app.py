@@ -3138,6 +3138,19 @@ class MainWindow(QMainWindow):
         self.backtest_comparison = QLabel("1X2 probability quality vs the prior-results competition baseline: —")
         self.backtest_comparison.setWordWrap(True)
         box.addWidget(self.backtest_comparison)
+        backtest_model_title = QLabel("Historical model component comparison")
+        backtest_model_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
+        box.addWidget(backtest_model_title)
+        self.backtest_model_table = QTableWidget(0, 5)
+        self.backtest_model_table.setHorizontalHeaderLabels([
+            "Model component", "Matches", "1X2 accuracy", "Brier score", "Log loss"
+        ])
+        self.backtest_model_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.backtest_model_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self.backtest_model_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.backtest_model_table.setMaximumHeight(180)
+        self.backtest_model_table.horizontalHeader().setStretchLastSection(True)
+        box.addWidget(self.backtest_model_table)
 
         backtest_market_title = QLabel("Historical market performance")
         backtest_market_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
@@ -3254,6 +3267,9 @@ class MainWindow(QMainWindow):
             f"Skipped matches: {self.backtest_skipped_card.value_label.text()}",
             self.backtest_comparison.text(),
             "",
+            "HISTORICAL MODEL COMPONENT COMPARISON",
+            table_text(self.backtest_model_table),
+            "",
             "HISTORICAL MARKET PERFORMANCE",
             table_text(self.backtest_market_table),
             "",
@@ -3288,6 +3304,7 @@ class MainWindow(QMainWindow):
             self.backtest_status.setText(result.get("message", "No matches could be evaluated."))
             self.backtest_comparison.setText("No 1X2 comparison is available.")
             self.backtest_market_table.setRowCount(0)
+            self.backtest_model_table.setRowCount(0)
             self.backtest_calibration_table.setRowCount(0)
             self.backtest_score_summary.setText("Correct-score coverage is unavailable.")
             self.backtest_comp_table.setRowCount(0)
@@ -3324,6 +3341,18 @@ class MainWindow(QMainWindow):
             f"Corner market selections graded: {result.get('corner_market_predictions', 0):,}. "
             "The imported database was read only."
         )
+
+        model_rows = result.get("by_model", [])
+        self.backtest_model_table.setRowCount(len(model_rows))
+        for row, stats in enumerate(model_rows):
+            values = [
+                stats["model"], stats["matches"],
+                f"{stats['accuracy']:.1%}" if stats.get("accuracy") is not None else "—",
+                f"{stats['brier_score']:.4f}" if stats.get("brier_score") is not None else "—",
+                f"{stats['log_loss']:.4f}" if stats.get("log_loss") is not None else "—",
+            ]
+            for column, value in enumerate(values):
+                self.backtest_model_table.setItem(row, column, QTableWidgetItem(str(value)))
 
         calibration_rows = []
         for market_name, bins in result.get("calibration_by_market", {}).items():
