@@ -31,6 +31,8 @@ class DataQualityTests(unittest.TestCase):
              "Liverpool", "Everton", 1, 0, "{broken"),
             (-4, -10, 2025, "Premier League", "England", "2023-09-01", "FT",
              "Spurs", "Fulham", 1, 1, None),
+            (-6, -10, 2024, "Premier League", "England", "2023-08-20", "FT",
+             "Brighton", "Luton", 4, 1, None),
             (-5, -10, 2021, "Premier League", "England", "2021-08-01", "FT",
              "Old", "Club", 0, 0, None),
         ])
@@ -43,11 +45,11 @@ class DataQualityTests(unittest.TestCase):
     def test_quality_report_counts_coverage_and_duplicate_conflicts(self):
         report = inspect_data_quality(self.path)
         self.assertEqual(report["total_records"], 5)
-        self.assertEqual(report["records_in_scope"], 4)
+        self.assertEqual(report["records_in_scope"], 5)
         self.assertEqual(report["records_before_window_or_invalid_date"], 1)
         self.assertEqual(report["competitions"], 1)
-        self.assertEqual(report["competition_seasons"], 2)
-        self.assertEqual(report["completed_matches"], 4)
+        self.assertEqual(report["competition_seasons"], 3)
+        self.assertEqual(report["completed_matches"], 5)
         issues = {item["issue"]: item["count"] for item in report["issues"]}
         self.assertEqual(issues["Potential duplicate matches"], 1)
         self.assertEqual(issues["Conflicting duplicate scores"], 1)
