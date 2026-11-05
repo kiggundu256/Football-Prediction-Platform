@@ -639,6 +639,14 @@ class MainWindow(QMainWindow):
         quality_coverage_heading = QLabel("VERIFIED HISTORICAL COVERAGE (2022+)")
         quality_coverage_heading.setStyleSheet("font-size:14px;font-weight:700;color:#168BFF;margin-top:6px")
         box.addWidget(quality_coverage_heading)
+        self.verified_coverage_total_label = QLabel(
+            "Verified coverage totals will appear after the integrity scan."
+        )
+        self.verified_coverage_total_label.setWordWrap(True)
+        self.verified_coverage_total_label.setStyleSheet(
+            "color:#D8E5F7;font-weight:600;padding:4px;background:#101B2B;border-radius:6px"
+        )
+        box.addWidget(self.verified_coverage_total_label)
         self.data_quality_coverage_table = QTableWidget(0, 9)
         self.data_quality_coverage_table.setHorizontalHeaderLabels([
             "Competition", "Country", "Season", "Matches", "Completed",
@@ -762,6 +770,12 @@ class MainWindow(QMainWindow):
         coverage_heading = QLabel("IMPORTED MATCH COVERAGE")
         coverage_heading.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF;margin-top:8px")
         box.addWidget(coverage_heading)
+        self.imported_coverage_total_label = QLabel("Imported coverage totals: loading…")
+        self.imported_coverage_total_label.setWordWrap(True)
+        self.imported_coverage_total_label.setStyleSheet(
+            "color:#D8E5F7;font-weight:600;padding:4px;background:#101B2B;border-radius:6px"
+        )
+        box.addWidget(self.imported_coverage_total_label)
         coverage_note = QLabel(
             "Breakdown of the records actually stored in this local database, including CSV/API source, "
             "season range, completed matches and distinct teams."
@@ -896,6 +910,14 @@ class MainWindow(QMainWindow):
                     )
 
             coverage = report["coverage"]
+            verified_matches = sum(item["matches"] for item in coverage)
+            verified_completed = sum(item["completed"] for item in coverage)
+            verified_competitions = len({item["competition"] for item in coverage})
+            self.verified_coverage_total_label.setText(
+                f"2022+ verified totals: {verified_matches:,} matches  •  "
+                f"{verified_completed:,} completed  •  {verified_competitions:,} competitions  •  "
+                f"{len(coverage):,} competition-seasons"
+            )
             self.data_quality_coverage_table.setRowCount(len(coverage))
             for row_index, item in enumerate(coverage):
                 values = [
@@ -946,6 +968,11 @@ class MainWindow(QMainWindow):
             f"Completed matches with both corner totals: {corner_coverage['completed_with_corners']:,}"
         )
         coverage = self.historical_db.coverage_summary()
+        self.imported_coverage_total_label.setText(
+            f"All imported records: {stats['matches']:,} matches  •  "
+            f"{stats['completed']:,} completed  •  {stats['competitions']:,} competitions  •  "
+            f"{stats['competition_seasons']:,} competition-seasons"
+        )
         corner_rows = self.historical_db.corner_coverage_summary()["by_competition"]
         corner_counts = {
             (row["competition"], row["season"]): row["matches"] for row in corner_rows
