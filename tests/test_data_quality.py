@@ -44,7 +44,7 @@ class DataQualityTests(unittest.TestCase):
 
     def test_quality_report_counts_coverage_and_duplicate_conflicts(self):
         report = inspect_data_quality(self.path)
-        self.assertEqual(report["total_records"], 5)
+        self.assertEqual(report["total_records"], 6)
         self.assertEqual(report["records_in_scope"], 5)
         self.assertEqual(report["records_before_window_or_invalid_date"], 1)
         self.assertEqual(report["competitions"], 1)
