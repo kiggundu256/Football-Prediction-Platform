@@ -45,11 +45,12 @@ class DataQualityTests(unittest.TestCase):
     def test_quality_report_counts_coverage_and_duplicate_conflicts(self):
         report = inspect_data_quality(self.path)
         self.assertEqual(report["total_records"], 6)
-        self.assertEqual(report["records_in_scope"], 5)
-        self.assertEqual(report["records_before_window_or_invalid_date"], 1)
+        self.assertEqual(report["records_in_scope"], 6)
+        self.assertEqual(report["records_before_start_year"], 0)
+        self.assertEqual(report["invalid_date_records"], 0)
         self.assertEqual(report["competitions"], 1)
-        self.assertEqual(report["competition_seasons"], 3)
-        self.assertEqual(report["completed_matches"], 5)
+        self.assertEqual(report["competition_seasons"], 4)
+        self.assertEqual(report["completed_matches"], 6)
         issues = {item["issue"]: item["count"] for item in report["issues"]}
         self.assertEqual(issues["Potential duplicate matches"], 1)
         self.assertEqual(issues["Conflicting duplicate scores"], 1)
