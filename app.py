@@ -3128,6 +3128,8 @@ class MainWindow(QMainWindow):
             ["Market", "Graded", "Correct", "Accuracy", "Brier score"]
         )
         self.backtest_market_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.backtest_market_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self.backtest_market_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.backtest_market_table.setMaximumHeight(220)
         self.backtest_market_table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.backtest_market_table)
@@ -3141,6 +3143,8 @@ class MainWindow(QMainWindow):
             "Baseline Brier", "Model log loss", "Baseline log loss"
         ])
         self.backtest_comp_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.backtest_comp_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self.backtest_comp_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.backtest_comp_table.setMaximumHeight(300)
         self.backtest_comp_table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.backtest_comp_table)
@@ -3149,6 +3153,10 @@ class MainWindow(QMainWindow):
         self.backtest_methodology.setWordWrap(True)
         self.backtest_methodology.setStyleSheet("color:#94A9C7;padding:6px")
         box.addWidget(self.backtest_methodology)
+
+        self.backtest_copy_button = QPushButton("Copy All Backtest Results")
+        self.backtest_copy_button.clicked.connect(self.copy_historical_backtest_results)
+        box.addWidget(self.backtest_copy_button)
 
         refresh = QPushButton("Refresh performance")
         refresh.clicked.connect(self.refresh_performance)
@@ -3174,6 +3182,48 @@ class MainWindow(QMainWindow):
     def historical_backtest_failed(self, message):
         self.backtest_status.setText("Backtest failed: " + message)
         QMessageBox.warning(self, "Historical backtest", message)
+
+    def copy_historical_backtest_results(self):
+        """Copy the complete historical backtest summary and both result tables."""
+        def table_text(table):
+            headers = [
+                table.horizontalHeaderItem(column).text()
+                if table.horizontalHeaderItem(column) else ""
+                for column in range(table.columnCount())
+            ]
+            rows = ["\\t".join(headers)]
+            for row in range(table.rowCount()):
+                values = []
+                for column in range(table.columnCount()):
+                    item = table.item(row, column)
+                    values.append(item.text() if item else "")
+                rows.append("\\t".join(values))
+            return "\\n".join(rows)
+
+        report = [
+            "HISTORICAL WALK-FORWARD BACKTEST",
+            f"Start year: {self.backtest_from_year.value()}",
+            f"Minimum prior matches per team: {self.backtest_min_history.value()}",
+            f"Completed source matches: {self.backtest_source_card.value_label.text()}",
+            f"Matches evaluated: {self.backtest_evaluated_card.value_label.text()}",
+            f"1X2 accuracy: {self.backtest_accuracy_card.value_label.text()}",
+            f"Skipped matches: {self.backtest_skipped_card.value_label.text()}",
+            self.backtest_comparison.text(),
+            "",
+            "HISTORICAL MARKET PERFORMANCE",
+            table_text(self.backtest_market_table),
+            "",
+            "PERFORMANCE BY COMPETITION AND SEASON",
+            table_text(self.backtest_comp_table),
+            "",
+            "METHODOLOGY",
+            self.backtest_methodology.text(),
+        ]
+        QApplication.clipboard().setText("\\n".join(report))
+        QMessageBox.information(
+            self, "Backtest results copied",
+            "All backtest figures and both tables have been copied. Paste them into this chat."
+        )
 
     def display_historical_backtest(self, result):
         self.backtest_source_card.value_label.setText(str(result.get("source_completed_matches", 0)))
