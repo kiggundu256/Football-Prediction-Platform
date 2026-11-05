@@ -56,6 +56,14 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertEqual(result["evaluated_matches"], 2)
         self.assertEqual(result["skipped_insufficient_history"], 5)
         self.assertIn("1X2", result["by_market"])
+        self.assertEqual(
+            {item["model"] for item in result["by_model"]},
+            {"Goal distribution", "Recent form", "Ensemble"},
+        )
+        for item in result["by_model"]:
+            self.assertEqual(item["matches"], 2)
+            self.assertIsNotNone(item["brier_score"])
+            self.assertIsNotNone(item["log_loss"])
         self.assertIn("Over 2.5", result["by_market"])
         self.assertGreater(result["brier_score_1x2"], 0)
         self.assertGreater(result["by_market"]["1X2"]["brier_score"], 0)
