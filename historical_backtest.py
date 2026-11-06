@@ -595,7 +595,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "prior_strength": 30,
             "training_samples_by_market": dict(sorted(market_calibration_training_counts.items())),
             "baseline": "Smoothed historical event rate for the same market using all valid completed matches from earlier dates, including fixtures skipped by the prediction model; 1X2 uses prior competition outcome rates; correct-score top-1 uses add-one-smoothed prior competition score frequencies over an 11x11 score grid.",
-            "sample_warnings": "Below 30 observations: low sample; 30–99: caution; 100+: adequate. Overconfidence flags require at least 30 observations.",
+            "sample_warnings": "Below 30 observations: low sample; 30–99: caution; 100+: adequate. Overconfidence flags require at least 30 observations and the mean predicted probability to exceed the observed-rate 95% Wilson upper confidence bound.",
             "leakage_control": "Same-day outcomes enter calibration and baseline history only after every forecast for that date is complete.",
         },
         "corner_calibration": {
