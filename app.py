@@ -3319,7 +3319,7 @@ class MainWindow(QMainWindow):
             self.backtest_score_summary.text(),
             self.backtest_comp_summary.text(),
         ]
-        QApplication.clipboard().setText("\\n".join(report))
+        QApplication.clipboard().setText("\n".join(report))
         QMessageBox.information(
             self, "Summary copied",
             "The compact backtest summary has been copied. Paste it into this chat."
@@ -3361,18 +3361,18 @@ class MainWindow(QMainWindow):
             if table.horizontalHeaderItem(column) else ""
             for column in range(table.columnCount())
         ]
-        lines = ["\\t".join(headers)]
+        lines = ["\t".join(headers)]
         for row in range(start_row, end_row):
             values = []
             for column in range(table.columnCount()):
                 item = table.item(row, column)
                 values.append(item.text() if item else "")
-            lines.append("\\t".join(values))
+            lines.append("\t".join(values))
 
         copied_text = (
             f"{table_name} | Chunk {self.backtest_chunk_index + 1}/{total_chunks} "
-            f"| Rows {start_row + 1}-{end_row} of {total_rows}\\n"
-            + "\\n".join(lines)
+            f"| Rows {start_row + 1}-{end_row} of {total_rows}\n"
+            + "\n".join(lines)
         )
         QApplication.clipboard().setText(copied_text)
         progress = (
@@ -3386,6 +3386,7 @@ class MainWindow(QMainWindow):
         )
 
     def display_historical_backtest(self, result):
+        self.backtest_chunk_index = 0
         self.backtest_source_card.value_label.setText(str(result.get("source_completed_matches", 0)))
         self.backtest_evaluated_card.value_label.setText(str(result.get("evaluated_matches", 0)))
         self.backtest_skipped_card.value_label.setText(str(result.get("skipped_insufficient_history", 0)))
