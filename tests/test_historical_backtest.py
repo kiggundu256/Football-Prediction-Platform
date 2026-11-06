@@ -120,11 +120,18 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("raw_calibration_by_market", result)
         self.assertIn("corner_calibration", result)
         self.assertIn("leakage_control", result["corner_calibration"])
-        # Both graded fixtures are on the same date, so neither can train the other.
+        # Both fixtures share a date: neither can train the other. After the
+        # date closes, both outcomes become available to later dates, so the
+        # final running training count is two for each corner market.
         self.assertTrue(all(
-            count == 0
+            count == 2
             for count in result["corner_calibration"]["training_samples_by_market"].values()
         ))
+        # With only two same-day outcomes, the 30-sample threshold is not met;
+        # calibration must therefore leave the raw Brier unchanged.
+        self.assertAlmostEqual(
+            over["brier_score"], over["raw_brier_score"], places=12
+        )
 
     def test_no_evaluation_when_prior_history_is_insufficient(self):
         result = run_historical_backtest(self.path, from_year=2020, minimum_history=6)
