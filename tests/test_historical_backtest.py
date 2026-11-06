@@ -3,8 +3,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from historical_backtest import (run_historical_backtest, _prequential_calibrate,
-                                 _prequential_calibrate_from_bins)
+from historical_backtest import (
+    run_historical_backtest, _prequential_calibrate,
+    _prequential_calibrate_from_bins, _calibration_bins,
+    _market_add, _finalize_market_stats,
+)
 
 
 def insert_match(db, fixture_id, day, home, away, hg, ag, competition="Premier League",
@@ -126,6 +129,11 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertGreater(result["correct_score"]["graded"], 0)
         self.assertIn("Correct score (top 1)", result["by_market"])
         self.assertIsNotNone(result["by_market"]["Correct score (top 1)"]["baseline_brier_score"])
+        self.assertIsNotNone(result["by_market"]["Correct score (top 1)"]["observed_event_rate"])
+        self.assertAlmostEqual(
+            result["by_market"]["Correct score (top 1)"]["observed_event_rate"],
+            result["by_market"]["Correct score (top 1)"]["selection_accuracy"],
+        )
         self.assertIn("1X2 most-likely outcome", result["calibration_by_market"])
         self.assertEqual(len(result["calibration_by_market"]["1X2 most-likely outcome"]), 10)
 
@@ -176,6 +184,68 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertAlmostEqual(
             over["brier_score"], over["raw_brier_score"], places=12
         )
+
+    def test_overconfidence_flag_requires_statistical_evidence(self):
+        # A five-point gap at 100 observations is not automatically significant.
+        noisy_gap = _calibration_bins(
+            [(0.55, True)] * 50 + [(0.55, False)] * 50
+        )
+        noisy_bin = next(item for item in noisy_gap if item["count"])
+        self.assertAlmostEqual(noisy_bin["mean_probability"], 0.55)
+        self.assertAlmostEqual(noisy_bin["observed_rate"], 0.50)
+        self.assertGreater(noisy_bin["observed_rate_upper_95"], 0.55)
+        self.assertFalse(noisy_bin["overconfident"])
+
+        # A large, persistent gap should exceed the observed-rate confidence bound.
+        strong_gap = _calibration_bins(
+            [(0.80, True)] * 50 + [(0.80, False)] * 50
+        )
+        strong_bin = next(item for item in strong_gap if item["count"])
+        self.assertLess(strong_bin["observed_rate_upper_95"], 0.80)
+        self.assertTrue(strong_bin["overconfident"])
+        self.assertIn("95% Wilson", strong_bin["overconfidence_evidence"])
+
+        # Even an extreme gap is not flagged below the minimum sample threshold.
+        low_sample = _calibration_bins([(0.90, False)] * 29)
+        low_bin = next(item for item in low_sample if item["count"])
+        self.assertFalse(low_bin["overconfident"])
+        self.assertIsNone(low_bin["observed_rate_upper_95"] if low_bin["count"] == 0 else None)
+        self.assertIn("Insufficient sample", low_bin["overconfidence_evidence"])
+
+    def test_binary_market_brier_scores_match_hand_calculation(self):
+        stats = {}
+        _market_add(stats, "Over 2.5", True, True, probability=0.80,
+                    raw_probability=0.70, baseline_probability=0.50)
+        _market_add(stats, "Over 2.5", False, False, probability=0.30,
+                    raw_probability=0.40, baseline_probability=0.50)
+        result = _finalize_market_stats(stats)["Over 2.5"]
+        self.assertAlmostEqual(result["brier_score"], 0.065)
+        self.assertAlmostEqual(result["raw_brier_score"], 0.125)
+        self.assertAlmostEqual(result["baseline_brier_score"], 0.25)
+        self.assertAlmostEqual(result["baseline_improvement"], 0.185)
+        self.assertAlmostEqual(result["observed_event_rate"], 0.50)
+        self.assertAlmostEqual(result["selection_accuracy"], 1.0)
+
+    def test_correct_score_observed_event_rate_is_top_one_hit_rate(self):
+        stats = {}
+        _market_add(stats, "Correct score (top 1)", True, True,
+                    brier_value=0.10, baseline_brier_value=0.20)
+        _market_add(stats, "Correct score (top 1)", False, True,
+                    brier_value=0.30, baseline_brier_value=0.20)
+        result = _finalize_market_stats(stats)["Correct score (top 1)"]
+        self.assertAlmostEqual(result["observed_event_rate"], 0.50)
+        self.assertAlmostEqual(result["selection_accuracy"], 0.50)
+        self.assertAlmostEqual(result["baseline_brier_score"], 0.20)
+
+    def test_calibration_bins_include_probability_extremes_and_empty_bins(self):
+        bins = _calibration_bins([(0.0, False), (1.0, True)])
+        self.assertEqual(bins[0]["count"], 1)
+        self.assertEqual(bins[-1]["count"], 1)
+        self.assertEqual(bins[1]["count"], 0)
+        self.assertIsNone(bins[1]["mean_probability"])
+        self.assertIsNone(bins[1]["observed_rate_upper_95"])
+        self.assertFalse(bins[0]["overconfident"])
+        self.assertFalse(bins[-1]["overconfident"])
 
     def test_no_evaluation_when_prior_history_is_insufficient(self):
         result = run_historical_backtest(self.path, from_year=2020, minimum_history=6)
