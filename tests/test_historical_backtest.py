@@ -3,7 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from historical_backtest import run_historical_backtest, _prequential_calibrate
+from historical_backtest import (run_historical_backtest, _prequential_calibrate,
+                                 _prequential_calibrate_from_bins)
 
 
 def insert_match(db, fixture_id, day, home, away, hg, ag, competition="Premier League",
@@ -96,6 +97,19 @@ class HistoricalBacktestTests(unittest.TestCase):
         calibrated = _prequential_calibrate(0.82, prior)
         self.assertAlmostEqual(calibrated, 0.41)
         self.assertEqual(_prequential_calibrate(0.82, prior[:29]), 0.82)
+
+    def test_running_bin_calibration_matches_full_history_calibration(self):
+        prior = [(0.82, False)] * 30 + [(0.86, True)] * 12 + [(0.45, True)] * 7
+        bins = [[0, 0] for _ in range(10)]
+        for probability, outcome in prior:
+            index = min(9, int(probability * 10))
+            bins[index][0] += 1
+            bins[index][1] += int(outcome)
+        for probability in (0.82, 0.86, 0.45, 0.12):
+            self.assertAlmostEqual(
+                _prequential_calibrate_from_bins(probability, bins),
+                _prequential_calibrate(probability, prior),
+            )
 
     def test_market_report_separates_selection_accuracy_from_event_rate(self):
         result = run_historical_backtest(self.path, from_year=2020, minimum_history=5)
