@@ -3155,10 +3155,11 @@ class MainWindow(QMainWindow):
         backtest_market_title = QLabel("Historical market performance")
         backtest_market_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
         box.addWidget(backtest_market_title)
-        self.backtest_market_table = QTableWidget(0, 7)
+        self.backtest_market_table = QTableWidget(0, 10)
         self.backtest_market_table.setHorizontalHeaderLabels([
             "Market / event", "Graded", "Correct side selections",
-            "Selection accuracy", "Observed event rate", "Calibrated Brier", "Raw Brier"
+            "Selection accuracy", "Observed event rate", "Calibrated Brier",
+            "Raw Brier", "Historical baseline Brier", "Improvement vs baseline", "Sample warning"
         ])
         market_note = QLabel(
             "Selection accuracy measures whether the model chose the more likely side. "
@@ -3180,14 +3181,22 @@ class MainWindow(QMainWindow):
         backtest_calibration_title = QLabel("Historical probability calibration")
         backtest_calibration_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
         box.addWidget(backtest_calibration_title)
-        self.backtest_calibration_table = QTableWidget(0, 6)
+        self.backtest_calibration_table = QTableWidget(0, 9)
         self.backtest_calibration_table.setHorizontalHeaderLabels([
             "Market / event", "Probability set", "Confidence range", "Graded",
-            "Average probability", "Observed rate"
+            "Average probability", "Observed rate", "Overconfidence gap",
+            "Sample warning", "Reliability"
         ])
         self.backtest_calibration_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.backtest_calibration_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
         self.backtest_calibration_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        calibration_note = QLabel(
+            "Overconfidence gap = average predicted probability minus observed event rate. "
+            "A positive gap means overconfidence; flags require at least 30 observations in that confidence range. "
+            "Below 30 samples is low evidence; 30–99 is caution; 100+ is a stronger sample."
+        )
+        calibration_note.setWordWrap(True)
+        box.addWidget(calibration_note)
         self.backtest_calibration_table.setMaximumHeight(320)
         self.backtest_calibration_table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.backtest_calibration_table)
@@ -3350,9 +3359,13 @@ class MainWindow(QMainWindow):
         self.backtest_status.setText(
             f"Completed: {result['evaluated_matches']:,} historical matches evaluated from {result['from_year']} onward. "
             f"Corner market selections graded: {result.get('corner_market_predictions', 0):,}. "
-            f"Corner calibration uses earlier dates only (30 prior same-bin samples required; "
-            f"{result.get('corner_calibration', {}).get('prior_strength', 30)} pseudo-sample shrinkage). "
-            "Raw and calibrated Brier scores are shown separately. The imported database was read only."
+            f"Pre-match calibration is applied separately to goals, BTTS and corner markets using earlier dates only "
+            f"({result.get('market_calibration', {}).get('minimum_prior_samples', 30)} prior same-bin samples required; "
+            f"{result.get('market_calibration', {}).get('prior_strength', 30)} pseudo-sample shrinkage). "
+            "Every reported market is benchmarked against a suitable historical baseline. "
+            "Sample warnings: below 30 = low; 30–99 = caution; 100+ = adequate. "
+            "Overconfidence means average predicted probability exceeds observed frequency in a bin with at least 30 samples. "
+            "The imported database and production prediction formula were not changed."
         )
 
         model_rows = result.get("by_model", [])
@@ -3375,6 +3388,11 @@ class MainWindow(QMainWindow):
                         market_name, "Calibrated", item["range"], item["count"],
                         f"{item['mean_probability']:.1%}",
                         f"{item['observed_rate']:.1%}",
+                        f"{item.get('signed_gap', 0.0):+.1%}",
+                        item.get("sample_size_status", "—"),
+                        "OVERCONFIDENT" if item.get("overconfident") else (
+                            "Underconfident / aligned" if item.get("count", 0) >= 30 else "Insufficient sample"
+                        ),
                     ))
         for market_name, bins in result.get("raw_calibration_by_market", {}).items():
             for item in bins:
@@ -3383,6 +3401,11 @@ class MainWindow(QMainWindow):
                         market_name, "Raw", item["range"], item["count"],
                         f"{item['mean_probability']:.1%}",
                         f"{item['observed_rate']:.1%}",
+                        f"{item.get('signed_gap', 0.0):+.1%}",
+                        item.get("sample_size_status", "—"),
+                        "OVERCONFIDENT" if item.get("overconfident") else (
+                            "Underconfident / aligned" if item.get("count", 0) >= 30 else "Insufficient sample"
+                        ),
                     ))
         self.backtest_calibration_table.setRowCount(len(calibration_rows))
         for row, values in enumerate(calibration_rows):
@@ -3398,6 +3421,9 @@ class MainWindow(QMainWindow):
                 f"{stats['observed_event_rate']:.1%}" if stats.get("observed_event_rate") is not None else "—",
                 f"{stats['brier_score']:.4f}" if stats.get("brier_score") is not None else "—",
                 f"{stats['raw_brier_score']:.4f}" if stats.get("raw_brier_score") is not None else "—",
+                f"{stats['baseline_brier_score']:.4f}" if stats.get("baseline_brier_score") is not None else "—",
+                f"{stats['baseline_improvement']:+.4f}" if stats.get("baseline_improvement") is not None else "—",
+                stats.get("sample_size_status", "—"),
             ]
             for column, value in enumerate(values):
                 self.backtest_market_table.setItem(row, column, QTableWidgetItem(str(value)))
