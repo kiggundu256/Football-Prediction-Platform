@@ -2521,23 +2521,23 @@ class MainWindow(QMainWindow):
                 "settled examples contributes to the 1X2 probabilities."
             )
         report = (
-            f"{home_name} vs {away_name}\n"
-            f"{(item.get('league') or {}).get('name', 'Unknown')} • Analysis #{prediction_id}\n\n"
-            "MODEL INPUTS\n"
+            f"{home_name} vs {away_name}\\n"
+            f"{(item.get('league') or {}).get('name', 'Unknown')} • Analysis #{prediction_id}\\n\\n"
+            "MODEL INPUTS\\n"
             f"Historical completed matches: {home_name} {hr['played']}, {away_name} {ar['played']} "
-            "(up to 5 per team; local historical database is preferred when available)\n"
+            "(up to 5 per team; local historical database is preferred when available)\\n"
             f"Estimated goals (xG-style baseline): {home_name} {home_xg:.2f} — "
-            f"{away_xg:.2f} {away_name}\n\n"
-            "PREDICTED MARKETS\n"
-            f"1X2: Home {markets['home_win']:.1%} | Draw {markets['draw']:.1%} | Away {markets['away_win']:.1%}\n"
-            "TOTAL GOALS — Over / Under\n"
-            f"1.5: Over {markets['over']['1.5']:.1%} | Under {1 - markets['over']['1.5']:.1%}\n"
-            f"2.5: Over {markets['over']['2.5']:.1%} | Under {1 - markets['over']['2.5']:.1%}\n"
-            f"3.5: Over {markets['over']['3.5']:.1%} | Under {1 - markets['over']['3.5']:.1%}\n"
-            f"BTTS Yes {markets['btts_yes']:.1%} | BTTS No {markets['btts_no']:.1%}\n"
-            f"Most likely scorelines: {scores}\n\n"
-            + "\n".join(explanation)
-            + "\n\nDATA COVERAGE: Historical matches are drawn from the local database when available; "
+            f"{away_xg:.2f} {away_name}\\n\\n"
+            "PREDICTED MARKETS\\n"
+            f"1X2: Home {markets['home_win']:.1%} | Draw {markets['draw']:.1%} | Away {markets['away_win']:.1%}\\n"
+            "TOTAL GOALS — Over / Under\\n"
+            f"1.5: Over {markets['over']['1.5']:.1%} | Under {1 - markets['over']['1.5']:.1%}\\n"
+            f"2.5: Over {markets['over']['2.5']:.1%} | Under {1 - markets['over']['2.5']:.1%}\\n"
+            f"3.5: Over {markets['over']['3.5']:.1%} | Under {1 - markets['over']['3.5']:.1%}\\n"
+            f"BTTS Yes {markets['btts_yes']:.1%} | BTTS No {markets['btts_no']:.1%}\\n"
+            f"Most likely scorelines: {scores}\\n\\n"
+            + "\\n".join(explanation)
+            + "\\n\\nDATA COVERAGE: Historical matches are drawn from the local database when available; "
             "coverage depends on imported dates, completed results and team-name matching."
         )
         self.api_message.setText(
@@ -2719,9 +2719,9 @@ class MainWindow(QMainWindow):
             section_title("MODEL ENSEMBLE & DATA QUALITY")
             quality = model_quality or markets.get("model_quality", {})
             quality_text = QLabel(
-                f"Models: {markets.get('model', 'Poisson baseline')}\n"
-                f"Completed matches per team: {quality.get('minimum_team_sample', 0)}\n"
-                f"Confidence band: {quality.get('confidence_band', 'Not assessed')}\n"
+                f"Models: {markets.get('model', 'Poisson baseline')}\\n"
+                f"Completed matches per team: {quality.get('minimum_team_sample', 0)}\\n"
+                f"Confidence band: {quality.get('confidence_band', 'Not assessed')}\\n"
                 f"Trained local ML: {'Active' if quality.get('trained_ml_model') else 'Waiting for 200 settled examples'}"
             )
             quality_text.setWordWrap(True)
@@ -2970,7 +2970,7 @@ class MainWindow(QMainWindow):
         self.markets = predict_markets(self.hxg.value() / 100, self.axg.value() / 100)
         m = self.markets; f = self.fixture.currentData()
         scores = ", ".join(f"{h}-{a} ({p:.1%})" for h, a, p in m["top_scores"])
-        self.output.setText("\n".join([
+        self.output.setText("\\n".join([
             f"{f[1]} vs {f[2]}", "",
             f"1X2: Home {m['home_win']:.1%} | Draw {m['draw']:.1%} | Away {m['away_win']:.1%}",
             "TOTAL GOALS — Over / Under:",
@@ -3300,14 +3300,14 @@ class MainWindow(QMainWindow):
                 if table.horizontalHeaderItem(column) else ""
                 for column in range(table.columnCount())
             ]
-            rows = ["\t".join(headers)]
+            rows = ["\\t".join(headers)]
             for row in range(table.rowCount()):
                 values = []
                 for column in range(table.columnCount()):
                     item = table.item(row, column)
                     values.append(item.text() if item else "")
-                rows.append("\t".join(values))
-            return "\n".join(rows)
+                rows.append("\\t".join(values))
+            return "\\n".join(rows)
 
         report = [
             "HISTORICAL WALK-FORWARD BACKTEST",
@@ -3340,7 +3340,7 @@ class MainWindow(QMainWindow):
             "METHODOLOGY",
             self.backtest_methodology.text(),
         ]
-        QApplication.clipboard().setText("\n".join(report))
+        QApplication.clipboard().setText("\\n".join(report))
         QMessageBox.information(
             self, "Backtest results copied",
             "The backtest summary and all four result tables have been copied. Paste them into this chat."
@@ -3501,8 +3501,8 @@ class MainWindow(QMainWindow):
         ) or "No competition-season was worse than the baseline on both metrics."
         mixed_count = sum(1 for item in eligible if item.get("assessment") == "Mixed results")
         self.backtest_comp_summary.setText(
-            f"STRONGEST (beats baseline on both Brier and log loss): {strong_text}\n"
-            f"NEEDS ATTENTION (worse on both): {weak_text}\n"
+            f"STRONGEST (beats baseline on both Brier and log loss): {strong_text}\\n"
+            f"NEEDS ATTENTION (worse on both): {weak_text}\\n"
             f"Mixed results: {mixed_count} competition-seasons. "
             "Highlights require at least 100 evaluated matches; all sample sizes remain visible above."
         )
@@ -3667,8 +3667,8 @@ def enable_table_copy(table):
         rows = {}
         for index in indexes:
             rows.setdefault(index.row(), {})[index.column()] = index.data() or ""
-        text = "\n".join(
-            "\t".join(rows[row].get(column, "") for column in range(table.columnCount()))
+        text = "\\n".join(
+            "\\t".join(rows[row].get(column, "") for column in range(table.columnCount()))
             for row in sorted(rows)
         )
         QApplication.clipboard().setText(text)
