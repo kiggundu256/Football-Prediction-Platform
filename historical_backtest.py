@@ -7,7 +7,7 @@ day have been generated. The production prediction formula is not modified.
 import json
 import sqlite3
 from collections import defaultdict
-from math import log
+from math import log, sqrt
 
 from model_ensemble import predict_ensemble
 from corners_engine import predict_corner_markets
@@ -120,7 +120,8 @@ def _finalize_market_stats(stats):
             "observed_event_rate": (
                 item["event_count"] / item["graded"]
                 if item["event_count"] or ("Over " in name or "Under " in name or name.startswith("BTTS "))
-                else None
+                else item["correct"] / item["graded"]
+                if name.startswith("Correct score") and item["graded"] else None
             ),
             "brier_score": item["brier_sum"] / item["graded"] if item["graded"] else None,
             "raw_brier_score": item["raw_brier_sum"] / item["graded"] if item["graded"] else None,
@@ -141,8 +142,25 @@ def _finalize_market_stats(stats):
     return output
 
 
+def _wilson_interval(successes, total, z=1.96):
+    """Return the two-sided Wilson score interval for a binomial event rate."""
+    n = int(total)
+    if n <= 0:
+        return None, None
+    observed = max(0, min(n, int(successes))) / n
+    z_squared = float(z) ** 2
+    denominator = 1.0 + z_squared / n
+    center = (observed + z_squared / (2.0 * n)) / denominator
+    margin = (
+        float(z) * sqrt(
+            (observed * (1.0 - observed) + z_squared / (4.0 * n)) / n
+        ) / denominator
+    )
+    return max(0.0, center - margin), min(1.0, center + margin)
+
+
 def _calibration_bins(samples, bin_count=10):
-    """Reliability bins for a probability assigned to a binary event."""
+    """Reliability bins; flag overconfidence only beyond sampling uncertainty."""
     bins = [{"lower": i / bin_count, "upper": (i + 1) / bin_count,
              "count": 0, "probability_sum": 0.0, "observed_sum": 0}
             for i in range(bin_count)]
@@ -153,26 +171,39 @@ def _calibration_bins(samples, bin_count=10):
         item["count"] += 1
         item["probability_sum"] += p
         item["observed_sum"] += int(bool(observed))
-    return [{
-        "range": f"{item['lower']:.1f}-{item['upper']:.1f}",
-        "count": item["count"],
-        "mean_probability": item["probability_sum"] / item["count"] if item["count"] else None,
-        "observed_rate": item["observed_sum"] / item["count"] if item["count"] else None,
-        "absolute_gap": abs(item["probability_sum"] / item["count"] -
-                            item["observed_sum"] / item["count"]) if item["count"] else None,
-        "signed_gap": (
-            item["probability_sum"] - item["observed_sum"]
-        ) / item["count"] if item["count"] else None,
-        "sample_size_status": (
-            "LOW SAMPLE — do not rely" if item["count"] < 30 else
-            "CAUTION — limited evidence" if item["count"] < 100 else
-            "ADEQUATE SAMPLE"
-        ) if item["count"] else "NO DATA",
-        "overconfident": bool(
-            item["count"] >= 30 and
-            item["probability_sum"] > item["observed_sum"]
-        ) if item["count"] else False,
-    } for item in bins]
+    output = []
+    for item in bins:
+        count = item["count"]
+        mean_probability = item["probability_sum"] / count if count else None
+        observed_rate = item["observed_sum"] / count if count else None
+        _, observed_upper_95 = _wilson_interval(item["observed_sum"], count)
+        statistically_overconfident = bool(
+            count >= 30 and mean_probability is not None
+            and observed_upper_95 is not None
+            and mean_probability > observed_upper_95
+        )
+        output.append({
+            "range": f"{item['lower']:.1f}-{item['upper']:.1f}",
+            "count": count,
+            "mean_probability": mean_probability,
+            "observed_rate": observed_rate,
+            "absolute_gap": abs(mean_probability - observed_rate) if count else None,
+            "signed_gap": mean_probability - observed_rate if count else None,
+            "observed_rate_upper_95": observed_upper_95,
+            "sample_size_status": (
+                "LOW SAMPLE — do not rely" if count < 30 else
+                "CAUTION — limited evidence" if count < 100 else
+                "ADEQUATE SAMPLE"
+            ) if count else "NO DATA",
+            "overconfident": statistically_overconfident,
+            "overconfidence_evidence": (
+                "Probability exceeds the 95% Wilson upper bound"
+                if statistically_overconfident else
+                "No statistically clear overconfidence signal"
+                if count >= 30 else "Insufficient sample for an overconfidence test"
+            ),
+        })
+    return output
 
 
 def _multiclass_calibration(samples, bin_count=10):
