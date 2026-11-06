@@ -3192,7 +3192,8 @@ class MainWindow(QMainWindow):
         self.backtest_calibration_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         calibration_note = QLabel(
             "Overconfidence gap = average predicted probability minus observed event rate. "
-            "A positive gap means overconfidence; flags require at least 30 observations in that confidence range. "
+            "A positive gap is a warning signal; OVERCONFIDENT is shown only when the mean probability "
+            "exceeds the observed-rate 95% Wilson upper confidence bound with at least 30 observations. "
             "Below 30 samples is low evidence; 30–99 is caution; 100+ is a stronger sample."
         )
         calibration_note.setWordWrap(True)
@@ -3364,7 +3365,7 @@ class MainWindow(QMainWindow):
             f"{result.get('market_calibration', {}).get('prior_strength', 30)} pseudo-sample shrinkage). "
             "Every reported market is benchmarked against a suitable historical baseline. "
             "Sample warnings: below 30 = low; 30–99 = caution; 100+ = adequate. "
-            "Overconfidence means average predicted probability exceeds observed frequency in a bin with at least 30 samples. "
+            "Overconfidence is flagged only when average predicted probability exceeds the observed-rate 95% Wilson upper bound, with at least 30 samples. "
             "The imported database and production prediction formula were not changed."
         )
 
