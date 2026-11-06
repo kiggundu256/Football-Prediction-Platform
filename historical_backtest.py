@@ -321,7 +321,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             baseline_log_loss_sum += baseline_loss
             _market_add(
                 market_stats, "1X2", predicted_outcome, actual_outcome,
-                brier_value=model_brier,
+                brier_value=model_brier, baseline_brier_value=baseline_brier,
             )
             calibration_samples["1X2 most-likely outcome"].append(
                 (max(probabilities), predicted_outcome == actual_outcome)
