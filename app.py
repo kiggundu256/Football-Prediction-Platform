@@ -41,7 +41,7 @@ from historical_reconciliation import HistoricalReconciliation
 from data_quality import inspect_data_quality
 from player_intelligence import PlayerIntelligenceDatabase
 
-APP_NAME = "Football Prediction Platform"
+APP_NAME = ""
 KEYRING_SERVICE = "FootballPredictionPlatform"
 FIXTURES = [
     ("Uganda Premier League", "Vipers SC", "KCCA FC", 1.55, 0.95),
@@ -343,10 +343,8 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(APP_STYLESHEET)
         root = QWidget(); outer = QVBoxLayout(root)
         head = QHBoxLayout()
-        title = QLabel("FOOTBALL ANALYTICS")
-        title.setStyleSheet("font-size:24px;font-weight:800;color:#EAF2FF")
-        head.addWidget(title); head.addStretch()
-        head.addWidget(QLabel("Local-first • Forecast history • Performance tracking"))
+        # Keep the app identity area intentionally blank until a neutral name is chosen.
+        head.addStretch()
         outer.addLayout(head)
         self.warning = QLabel("Forecasts are estimates, not guarantees. Demo fixtures are illustrative; real-match analysis requires provider data.")
         self.warning.setWordWrap(True)
@@ -3230,9 +3228,22 @@ class MainWindow(QMainWindow):
         self.backtest_methodology.setStyleSheet("color:#94A9C7;padding:6px")
         box.addWidget(self.backtest_methodology)
 
-        self.backtest_copy_button = QPushButton("Copy All Backtest Results")
+        copy_actions = QHBoxLayout()
+        for table, label in [
+            (self.backtest_model_table, "Copy Model Comparison"),
+            (self.backtest_market_table, "Copy Market Performance"),
+            (self.backtest_calibration_table, "Copy Calibration Table"),
+            (self.backtest_comp_table, "Copy Competition Table"),
+        ]:
+            copy_button = QPushButton(label)
+            copy_button.clicked.connect(
+                lambda checked=False, target=table, name=label: self.copy_historical_backtest_table(target, name)
+            )
+            copy_actions.addWidget(copy_button)
+        self.backtest_copy_button = QPushButton("Copy All Tables")
         self.backtest_copy_button.clicked.connect(self.copy_historical_backtest_results)
-        box.addWidget(self.backtest_copy_button)
+        copy_actions.addWidget(self.backtest_copy_button)
+        box.addLayout(copy_actions)
 
         refresh = QPushButton("Refresh performance")
         refresh.clicked.connect(self.refresh_performance)
@@ -3261,8 +3272,28 @@ class MainWindow(QMainWindow):
         self.backtest_status.setText("Backtest failed: " + message)
         QMessageBox.warning(self, "Historical backtest", message)
 
+    def copy_historical_backtest_table(self, table, table_name):
+        """Copy one complete backtest results table, including its column headings."""
+        headers = [
+            table.horizontalHeaderItem(column).text()
+            if table.horizontalHeaderItem(column) else ""
+            for column in range(table.columnCount())
+        ]
+        rows = ["\\t".join(headers)]
+        for row in range(table.rowCount()):
+            values = []
+            for column in range(table.columnCount()):
+                item = table.item(row, column)
+                values.append(item.text() if item else "")
+            rows.append("\\t".join(values))
+        QApplication.clipboard().setText(table_name + "\\n" + "\\n".join(rows))
+        QMessageBox.information(
+            self, "Table copied",
+            f"{table_name} has been copied. Paste it into this chat."
+        )
+
     def copy_historical_backtest_results(self):
-        """Copy the complete historical backtest summary and both result tables."""
+        """Copy the complete historical backtest summary and all four result tables."""
         def table_text(table):
             headers = [
                 table.horizontalHeaderItem(column).text()
@@ -3312,7 +3343,7 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText("\\n".join(report))
         QMessageBox.information(
             self, "Backtest results copied",
-            "All backtest figures and both tables have been copied. Paste them into this chat."
+            "The backtest summary and all four result tables have been copied. Paste them into this chat."
         )
 
     def display_historical_backtest(self, result):
