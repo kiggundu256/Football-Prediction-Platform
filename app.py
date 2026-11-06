@@ -3228,22 +3228,55 @@ class MainWindow(QMainWindow):
         self.backtest_methodology.setStyleSheet("color:#94A9C7;padding:6px")
         box.addWidget(self.backtest_methodology)
 
-        copy_actions = QHBoxLayout()
-        for table, label in [
-            (self.backtest_model_table, "Copy Model Comparison"),
-            (self.backtest_market_table, "Copy Market Performance"),
-            (self.backtest_calibration_table, "Copy Calibration Table"),
-            (self.backtest_comp_table, "Copy Competition Table"),
-        ]:
-            copy_button = QPushButton(label)
-            copy_button.clicked.connect(
-                lambda checked=False, target=table, name=label: self.copy_historical_backtest_table(target, name)
-            )
-            copy_actions.addWidget(copy_button)
-        self.backtest_copy_button = QPushButton("Copy All Tables")
-        self.backtest_copy_button.clicked.connect(self.copy_historical_backtest_results)
-        copy_actions.addWidget(self.backtest_copy_button)
-        box.addLayout(copy_actions)
+        share_title = QLabel("Share backtest results in small messages")
+        share_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
+        box.addWidget(share_title)
+        share_hint = QLabel(
+            "Use Copy Summary first. Then select a table and copy it in small chunks. "
+            "Each chunk includes its column headings and row numbers."
+        )
+        share_hint.setWordWrap(True)
+        box.addWidget(share_hint)
+
+        share_summary_row = QHBoxLayout()
+        self.backtest_summary_copy_button = QPushButton("Copy Summary")
+        self.backtest_summary_copy_button.clicked.connect(self.copy_historical_backtest_summary)
+        share_summary_row.addWidget(self.backtest_summary_copy_button)
+        share_summary_row.addStretch()
+        box.addLayout(share_summary_row)
+
+        chunk_controls = QHBoxLayout()
+        self.backtest_chunk_table_selector = QComboBox()
+        self.backtest_chunk_table_selector.addItem("Model Comparison", self.backtest_model_table)
+        self.backtest_chunk_table_selector.addItem("Market Performance", self.backtest_market_table)
+        self.backtest_chunk_table_selector.addItem("Calibration Table", self.backtest_calibration_table)
+        self.backtest_chunk_table_selector.addItem("Competition Table", self.backtest_comp_table)
+        self.backtest_chunk_table_selector.currentIndexChanged.connect(self.reset_historical_backtest_chunk)
+        chunk_controls.addWidget(self.backtest_chunk_table_selector, 2)
+
+        self.backtest_chunk_size = QSpinBox()
+        self.backtest_chunk_size.setRange(5, 30)
+        self.backtest_chunk_size.setValue(15)
+        self.backtest_chunk_size.setSuffix(" rows per message")
+        self.backtest_chunk_size.valueChanged.connect(self.reset_historical_backtest_chunk)
+        chunk_controls.addWidget(self.backtest_chunk_size)
+
+        self.backtest_chunk_index = 0
+        self.backtest_copy_chunk_button = QPushButton("Copy Current Chunk")
+        self.backtest_copy_chunk_button.clicked.connect(self.copy_historical_backtest_chunk)
+        chunk_controls.addWidget(self.backtest_copy_chunk_button)
+
+        self.backtest_next_chunk_button = QPushButton("Copy Next Chunk")
+        self.backtest_next_chunk_button.clicked.connect(
+            lambda: self.copy_historical_backtest_chunk(next_chunk=True)
+        )
+        chunk_controls.addWidget(self.backtest_next_chunk_button)
+        box.addLayout(chunk_controls)
+
+        self.backtest_chunk_progress = QLabel("Ready. Start with Copy Summary, then copy the first table chunk.")
+        self.backtest_chunk_progress.setWordWrap(True)
+        self.backtest_chunk_progress.setStyleSheet("color:#94A9C7;padding:4px")
+        box.addWidget(self.backtest_chunk_progress)
 
         refresh = QPushButton("Refresh performance")
         refresh.clicked.connect(self.refresh_performance)
@@ -3272,45 +3305,10 @@ class MainWindow(QMainWindow):
         self.backtest_status.setText("Backtest failed: " + message)
         QMessageBox.warning(self, "Historical backtest", message)
 
-    def copy_historical_backtest_table(self, table, table_name):
-        """Copy one complete backtest results table, including its column headings."""
-        headers = [
-            table.horizontalHeaderItem(column).text()
-            if table.horizontalHeaderItem(column) else ""
-            for column in range(table.columnCount())
-        ]
-        rows = ["\t".join(headers)]
-        for row in range(table.rowCount()):
-            values = []
-            for column in range(table.columnCount()):
-                item = table.item(row, column)
-                values.append(item.text() if item else "")
-            rows.append("\t".join(values))
-        QApplication.clipboard().setText(table_name + "\n" + "\n".join(rows))
-        QMessageBox.information(
-            self, "Table copied",
-            f"{table_name} has been copied. Paste it into this chat."
-        )
-
-    def copy_historical_backtest_results(self):
-        """Copy the complete historical backtest summary and all four result tables."""
-        def table_text(table):
-            headers = [
-                table.horizontalHeaderItem(column).text()
-                if table.horizontalHeaderItem(column) else ""
-                for column in range(table.columnCount())
-            ]
-            rows = ["\\t".join(headers)]
-            for row in range(table.rowCount()):
-                values = []
-                for column in range(table.columnCount()):
-                    item = table.item(row, column)
-                    values.append(item.text() if item else "")
-                rows.append("\\t".join(values))
-            return "\\n".join(rows)
-
+    def copy_historical_backtest_summary(self):
+        """Copy a compact summary that is safe to paste into a chat message."""
         report = [
-            "HISTORICAL WALK-FORWARD BACKTEST",
+            "HISTORICAL WALK-FORWARD BACKTEST SUMMARY",
             f"Start year: {self.backtest_from_year.value()}",
             f"Minimum prior matches per team: {self.backtest_min_history.value()}",
             f"Completed source matches: {self.backtest_source_card.value_label.text()}",
@@ -3318,32 +3316,73 @@ class MainWindow(QMainWindow):
             f"1X2 accuracy: {self.backtest_accuracy_card.value_label.text()}",
             f"Skipped matches: {self.backtest_skipped_card.value_label.text()}",
             self.backtest_comparison.text(),
-            "",
-            "HISTORICAL MODEL COMPONENT COMPARISON",
-            table_text(self.backtest_model_table),
-            "",
-            "HISTORICAL MARKET PERFORMANCE",
-            table_text(self.backtest_market_table),
-            "",
-            "CORRECT SCORE COVERAGE",
             self.backtest_score_summary.text(),
-            "",
-            "HISTORICAL PROBABILITY CALIBRATION",
-            table_text(self.backtest_calibration_table),
-            "",
-            "PERFORMANCE BY COMPETITION AND SEASON",
-            table_text(self.backtest_comp_table),
-            "",
-            "STRONG / WEAK COMPETITION SUMMARY",
             self.backtest_comp_summary.text(),
-            "",
-            "METHODOLOGY",
-            self.backtest_methodology.text(),
         ]
         QApplication.clipboard().setText("\\n".join(report))
         QMessageBox.information(
-            self, "Backtest results copied",
-            "The backtest summary and all four result tables have been copied. Paste them into this chat."
+            self, "Summary copied",
+            "The compact backtest summary has been copied. Paste it into this chat."
+        )
+
+    def reset_historical_backtest_chunk(self, *_args):
+        """Return to the first chunk whenever the selected table or chunk size changes."""
+        self.backtest_chunk_index = 0
+        if hasattr(self, "backtest_chunk_progress"):
+            self.backtest_chunk_progress.setText(
+                "Selection changed. Click Copy Current Chunk to copy the first chunk."
+            )
+
+    def copy_historical_backtest_chunk(self, next_chunk=False):
+        """Copy a small, numbered slice of the selected backtest table."""
+        table = self.backtest_chunk_table_selector.currentData()
+        table_name = self.backtest_chunk_table_selector.currentText()
+        total_rows = table.rowCount()
+        chunk_size = self.backtest_chunk_size.value()
+
+        if total_rows == 0:
+            QMessageBox.information(self, "No rows to copy", f"{table_name} has no rows yet.")
+            return
+
+        total_chunks = (total_rows + chunk_size - 1) // chunk_size
+        if next_chunk:
+            if self.backtest_chunk_index + 1 >= total_chunks:
+                self.backtest_chunk_progress.setText(
+                    f"All {total_rows:,} rows in {table_name} have been copied."
+                )
+                QMessageBox.information(self, "End of table", "There are no more chunks in this table.")
+                return
+            self.backtest_chunk_index += 1
+
+        start_row = self.backtest_chunk_index * chunk_size
+        end_row = min(start_row + chunk_size, total_rows)
+        headers = [
+            table.horizontalHeaderItem(column).text()
+            if table.horizontalHeaderItem(column) else ""
+            for column in range(table.columnCount())
+        ]
+        lines = ["\\t".join(headers)]
+        for row in range(start_row, end_row):
+            values = []
+            for column in range(table.columnCount()):
+                item = table.item(row, column)
+                values.append(item.text() if item else "")
+            lines.append("\\t".join(values))
+
+        copied_text = (
+            f"{table_name} | Chunk {self.backtest_chunk_index + 1}/{total_chunks} "
+            f"| Rows {start_row + 1}-{end_row} of {total_rows}\\n"
+            + "\\n".join(lines)
+        )
+        QApplication.clipboard().setText(copied_text)
+        progress = (
+            f"Copied {table_name}: rows {start_row + 1}-{end_row} of {total_rows:,} "
+            f"(chunk {self.backtest_chunk_index + 1} of {total_chunks})."
+        )
+        self.backtest_chunk_progress.setText(progress)
+        QMessageBox.information(
+            self, "Chunk copied",
+            progress + " Paste it into this chat, then use Copy Next Chunk when ready."
         )
 
     def display_historical_backtest(self, result):
