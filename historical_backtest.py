@@ -49,10 +49,10 @@ def _corner_averages(history):
 
 
 def _market_add(stats, name, predicted, actual, probability=None, brier_value=None,
-                raw_probability=None):
+                raw_probability=None, baseline_probability=None, baseline_brier_value=None):
     item = stats.setdefault(name, {
         "graded": 0, "correct": 0, "brier_sum": 0.0, "raw_brier_sum": 0.0,
-        "event_count": 0,
+        "baseline_brier_sum": 0.0, "event_count": 0,
     })
     item["graded"] += 1
     correct = bool(predicted == actual)
@@ -60,13 +60,20 @@ def _market_add(stats, name, predicted, actual, probability=None, brier_value=No
     if brier_value is not None:
         item["brier_sum"] += float(brier_value)
         item["raw_brier_sum"] += float(brier_value)
+        if baseline_brier_value is not None:
+            item["baseline_brier_sum"] += float(baseline_brier_value)
     elif probability is not None:
         p = max(0.0, min(1.0, float(probability)))
         raw_p = p if raw_probability is None else max(0.0, min(1.0, float(raw_probability)))
         observed = float(bool(actual))
         item["brier_sum"] += (p - observed) ** 2
         item["raw_brier_sum"] += (raw_p - observed) ** 2
-    if ("Over " in name or "Under " in name or name.startswith("BTTS ")) and isinstance(actual, bool):
+        if baseline_probability is not None:
+            baseline_p = max(0.0, min(1.0, float(baseline_probability)))
+            item["baseline_brier_sum"] += (baseline_p - observed) ** 2
+    if ("Over " in name or "Under " in name or name.startswith("BTTS ")
+            or name.startswith("Corners ") or name.startswith("Home team corners ")
+            or name.startswith("Away team corners ")) and isinstance(actual, bool):
         item["event_count"] += int(actual)
 
 
@@ -115,6 +122,19 @@ def _finalize_market_stats(stats):
             ),
             "brier_score": item["brier_sum"] / item["graded"] if item["graded"] else None,
             "raw_brier_score": item["raw_brier_sum"] / item["graded"] if item["graded"] else None,
+            "baseline_brier_score": (
+                item["baseline_brier_sum"] / item["graded"]
+                if item["graded"] and item["baseline_brier_sum"] else None
+            ),
+            "baseline_improvement": (
+                (item["baseline_brier_sum"] - item["brier_sum"]) / item["graded"]
+                if item["graded"] and item["baseline_brier_sum"] else None
+            ),
+            "sample_size_status": (
+                "LOW SAMPLE — do not rely" if item["graded"] < 30 else
+                "CAUTION — limited evidence" if item["graded"] < 100 else
+                "ADEQUATE SAMPLE"
+            ),
         }
     return output
 
@@ -138,6 +158,18 @@ def _calibration_bins(samples, bin_count=10):
         "observed_rate": item["observed_sum"] / item["count"] if item["count"] else None,
         "absolute_gap": abs(item["probability_sum"] / item["count"] -
                             item["observed_sum"] / item["count"]) if item["count"] else None,
+        "signed_gap": (
+            item["probability_sum"] - item["observed_sum"]
+        ) / item["count"] if item["count"] else None,
+        "sample_size_status": (
+            "LOW SAMPLE — do not rely" if item["count"] < 30 else
+            "CAUTION — limited evidence" if item["count"] < 100 else
+            "ADEQUATE SAMPLE"
+        ) if item["count"] else "NO DATA",
+        "overconfident": bool(
+            item["count"] >= 30 and
+            item["probability_sum"] > item["observed_sum"]
+        ) if item["count"] else False,
     } for item in bins]
 
 
@@ -179,8 +211,9 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     raw_calibration_samples = defaultdict(list)
     # Running raw-probability-bin counts avoid rescanning every prior match.
     # Updates are deferred until the end of each date to preserve leakage control.
-    corner_calibration_bins = defaultdict(lambda: [[0, 0] for _ in range(10)])
-    corner_calibration_training_counts = defaultdict(int)
+    market_calibration_bins = defaultdict(lambda: [[0, 0] for _ in range(10)])
+    market_calibration_training_counts = defaultdict(int)
+    market_event_history = defaultdict(lambda: [0, 0])
     score_top1_correct = score_top5_correct = score_graded = 0
     corner_graded = 0
     skipped_insufficient_history = 0
@@ -193,7 +226,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     # Grouping by date ensures a fixture cannot use another result from the same day.
     for match_date in sorted(daily_groups):
         day_rows = daily_groups[match_date]
-        pending_corner_calibration = defaultdict(list)
+        pending_market_calibration = defaultdict(list)
+        pending_market_events = defaultdict(list)
         for row in day_rows:
             home_key, away_key = _team_key(row["home_team"]), _team_key(row["away_team"])
             if not home_key or not away_key or home_key == away_key:
@@ -215,6 +249,23 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
 
             markets = forecast["markets"]
             actual_home, actual_away = int(row["home_goals"]), int(row["away_goals"])
+
+            def record_binary_market(name, raw_probability, actual_event):
+                raw_p = max(0.0, min(1.0, float(raw_probability)))
+                probability = _prequential_calibrate_from_bins(
+                    raw_p, market_calibration_bins[name]
+                )
+                prior_count, prior_events = market_event_history[name]
+                baseline_p = (prior_events + 1.0) / (prior_count + 2.0)
+                observed = bool(actual_event)
+                _market_add(
+                    market_stats, name, probability >= 0.5, observed, probability,
+                    raw_probability=raw_p, baseline_probability=baseline_p,
+                )
+                calibration_samples[name].append((probability, observed))
+                raw_calibration_samples[name].append((raw_p, observed))
+                pending_market_calibration[name].append((raw_p, observed))
+                pending_market_events[name].append(observed)
             actual_outcome = 0 if actual_home > actual_away else (2 if actual_home < actual_away else 1)
             probabilities = [float(markets[key]) for key in ("home_win", "draw", "away_win")]
             predicted_outcome = max(range(3), key=lambda index: probabilities[index])
@@ -302,24 +353,14 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
 
             total_goals = actual_home + actual_away
             for line in (1.5, 2.5, 3.5):
-                probability = float(markets["over"][str(line)])
+                raw_over = float(markets["over"][str(line)])
                 actual_over = total_goals > line
-                _market_add(market_stats, f"Over {line}", probability >= 0.5, actual_over, probability)
-                calibration_samples[f"Over {line}"].append((probability, actual_over))
-                under_probability = 1.0 - probability
-                actual_under = not actual_over
-                _market_add(market_stats, f"Under {line}", under_probability >= 0.5,
-                            actual_under, under_probability)
-                calibration_samples[f"Under {line}"].append((under_probability, actual_under))
+                record_binary_market(f"Over {line}", raw_over, actual_over)
+                record_binary_market(f"Under {line}", 1.0 - raw_over, not actual_over)
             btts_probability = float(markets["btts_yes"])
             actual_btts = actual_home > 0 and actual_away > 0
-            _market_add(market_stats, "BTTS Yes", btts_probability >= 0.5,
-                        actual_btts, btts_probability)
-            calibration_samples["BTTS Yes"].append((btts_probability, actual_btts))
-            btts_no_probability = 1.0 - btts_probability
-            _market_add(market_stats, "BTTS No", btts_no_probability >= 0.5,
-                        not actual_btts, btts_no_probability)
-            calibration_samples["BTTS No"].append((btts_no_probability, not actual_btts))
+            record_binary_market("BTTS Yes", btts_probability, actual_btts)
+            record_binary_market("BTTS No", 1.0 - btts_probability, not actual_btts)
 
             try:
                 corner_data = json.loads(row["stats_json"] or "{}")
@@ -341,29 +382,10 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                         raw_probability = float(corner_forecast["over"][str(float(line))])
                         actual_over = actual_total_corners > line
                         name = f"Corners Over {line}"
-                        probability = _prequential_calibrate_from_bins(
-                            raw_probability, corner_calibration_bins[name]
-                        )
-                        corner_calibration_training_counts[name] = sum(
-                            item[0] for item in corner_calibration_bins[name]
-                        )
-                        _market_add(
-                            market_stats, name, probability >= 0.5, actual_over, probability,
-                            raw_probability=raw_probability,
-                        )
-                        calibration_samples[name].append((probability, actual_over))
-                        raw_calibration_samples[name].append((raw_probability, actual_over))
-                        pending_corner_calibration[name].append((raw_probability, actual_over))
-                        under_probability = 1.0 - probability
+                        record_binary_market(name, raw_probability, actual_over)
                         raw_under_probability = 1.0 - raw_probability
                         under_name = f"Corners Under {line}"
-                        _market_add(
-                            market_stats, under_name, under_probability >= 0.5,
-                            not actual_over, under_probability,
-                            raw_probability=raw_under_probability,
-                        )
-                        calibration_samples[under_name].append((under_probability, not actual_over))
-                        raw_calibration_samples[under_name].append((raw_under_probability, not actual_over))
+                        record_binary_market(under_name, raw_under_probability, not actual_over)
                         corner_graded += 2
                     for prefix, observed, forecast_key in (
                         ("Home team corners", float(home_corners), "home_over"),
@@ -373,29 +395,10 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                             raw_probability = float(corner_forecast[forecast_key][str(float(line))])
                             actual_over = observed > line
                             name = f"{prefix} Over {line}"
-                            probability = _prequential_calibrate_from_bins(
-                                raw_probability, corner_calibration_bins[name]
-                            )
-                            corner_calibration_training_counts[name] = sum(
-                                item[0] for item in corner_calibration_bins[name]
-                            )
-                            _market_add(
-                                market_stats, name, probability >= 0.5, actual_over, probability,
-                                raw_probability=raw_probability,
-                            )
-                            calibration_samples[name].append((probability, actual_over))
-                            raw_calibration_samples[name].append((raw_probability, actual_over))
-                            pending_corner_calibration[name].append((raw_probability, actual_over))
-                            under_probability = 1.0 - probability
+                            record_binary_market(name, raw_probability, actual_over)
                             raw_under_probability = 1.0 - raw_probability
                             under_name = f"{prefix} Under {line}"
-                            _market_add(
-                                market_stats, under_name, under_probability >= 0.5,
-                                not actual_over, under_probability,
-                                raw_probability=raw_under_probability,
-                            )
-                            calibration_samples[under_name].append((under_probability, not actual_over))
-                            raw_calibration_samples[under_name].append((raw_under_probability, not actual_over))
+                            record_binary_market(under_name, raw_under_probability, not actual_over)
                             corner_graded += 2
                 except (TypeError, ValueError, KeyError):
                     pass
@@ -403,17 +406,21 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             if max_matches is not None and evaluated >= int(max_matches):
                 break
 
-        # Reveal this date's corner outcomes only after every same-day forecast.
-        for market_name, samples in pending_corner_calibration.items():
-            bins = corner_calibration_bins[market_name]
+        # Reveal this date's market outcomes only after every same-day forecast.
+        for market_name, samples in pending_market_calibration.items():
+            bins = market_calibration_bins[market_name]
             for probability, outcome in samples:
                 raw_probability = max(0.0, min(1.0, float(probability)))
                 bin_index = min(9, int(raw_probability * 10))
                 bins[bin_index][0] += 1
                 bins[bin_index][1] += int(bool(outcome))
-            corner_calibration_training_counts[market_name] = sum(
+            market_calibration_training_counts[market_name] = sum(
                 item[0] for item in bins
             )
+        # Historical event-rate baselines also advance only after the date closes.
+        for market_name, outcomes in pending_market_events.items():
+            market_event_history[market_name][0] += len(outcomes)
+            market_event_history[market_name][1] += sum(int(value) for value in outcomes)
 
         # Only results from the completed date become available to later dates.
         for row in day_rows:
@@ -504,12 +511,26 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         "raw_calibration_by_market": {
             name: _calibration_bins(samples) for name, samples in sorted(raw_calibration_samples.items())
         },
-        "corner_calibration": {
-            "method": "Prequential probability-bin calibration with 30-match minimum and 30 pseudo-match shrinkage.",
+        "market_calibration": {
+            "markets": "Goals, BTTS and all corner totals/team markets",
+            "method": "Separate prequential raw-probability-bin calibration for each binary market.",
             "minimum_prior_samples": 30,
             "prior_strength": 30,
-            "training_samples_by_market": dict(sorted(corner_calibration_training_counts.items())),
-            "leakage_control": "Only completed matches from earlier calendar days are used; same-day outcomes are withheld until all forecasts for that date are complete.",
+            "training_samples_by_market": dict(sorted(market_calibration_training_counts.items())),
+            "baseline": "Smoothed historical event rate for the same market using earlier dates only.",
+            "sample_warnings": "Below 30 observations: low sample; 30–99: caution; 100+: adequate. Overconfidence flags require at least 30 observations.",
+            "leakage_control": "Same-day outcomes enter calibration and baseline history only after every forecast for that date is complete.",
+        },
+        "corner_calibration": {
+            "method": "Prequential calibration retained within the generalized market calibration layer.",
+            "minimum_prior_samples": 30,
+            "prior_strength": 30,
+            "training_samples_by_market": {
+                name: count for name, count in market_calibration_training_counts.items()
+                if name.startswith("Corners ") or name.startswith("Home team corners ")
+                or name.startswith("Away team corners ")
+            },
+            "leakage_control": "Only completed matches from earlier calendar days are used.",
         },
         "by_model": [{
             "model": name,
