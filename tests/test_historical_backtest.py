@@ -78,6 +78,15 @@ class HistoricalBacktestTests(unittest.TestCase):
                              "LOW SAMPLE — do not rely")
         self.assertIn("minimum_prior_samples", result["market_calibration"])
         self.assertIn("leakage_control", result["market_calibration"])
+        # Two same-day fixtures are withheld from one another and only become
+        # prior calibration samples after their shared date has closed.
+        self.assertEqual(result["market_calibration"]["training_samples_by_market"]["Over 2.5"], 2)
+        for market in ("Over 2.5", "BTTS Yes"):
+            self.assertAlmostEqual(
+                result["by_market"][market]["brier_score"],
+                result["by_market"][market]["raw_brier_score"],
+                places=12,
+            )
         self.assertGreater(result["brier_score_1x2"], 0)
         self.assertGreater(result["by_market"]["1X2"]["brier_score"], 0)
         self.assertAlmostEqual(
@@ -99,6 +108,7 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("Away team corners Under 4.5", result["by_market"])
         self.assertGreater(result["correct_score"]["graded"], 0)
         self.assertIn("Correct score (top 1)", result["by_market"])
+        self.assertIsNotNone(result["by_market"]["Correct score (top 1)"]["baseline_brier_score"])
         self.assertIn("1X2 most-likely outcome", result["calibration_by_market"])
         self.assertEqual(len(result["calibration_by_market"]["1X2 most-likely outcome"]), 10)
 
