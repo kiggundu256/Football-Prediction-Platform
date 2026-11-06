@@ -68,6 +68,17 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("Over 2.5", result["by_market"])
         self.assertIn("Under 2.5", result["by_market"])
         self.assertIn("BTTS No", result["by_market"])
+        # Baselines must learn from all earlier completed matches, including the
+        # five fixtures skipped because team history was not yet sufficient.
+        self.assertAlmostEqual(
+            result["by_market"]["Over 2.5"]["baseline_brier_score"], 1 / 49, places=10
+        )
+        self.assertAlmostEqual(
+            result["by_market"]["BTTS Yes"]["baseline_brier_score"], 1 / 49, places=10
+        )
+        self.assertAlmostEqual(
+            result["by_market"]["BTTS No"]["baseline_brier_score"], 1 / 49, places=10
+        )
         # Goals and BTTS now use their own chronological calibration streams.
         for market in ("Over 1.5", "Under 1.5", "Over 2.5", "BTTS Yes", "BTTS No"):
             self.assertIn(market, result["calibration_by_market"])
@@ -106,6 +117,12 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("Away team corners Over 4.5", result["by_market"])
         self.assertIn("Home team corners Under 4.5", result["by_market"])
         self.assertIn("Away team corners Under 4.5", result["by_market"])
+        # Corner baselines also use the earlier raw results even when those
+        # matches were not eligible for a model prediction.
+        self.assertAlmostEqual(
+            result["by_market"]["Corners Over 7.5"]["baseline_brier_score"],
+            1 / 49, places=10
+        )
         self.assertGreater(result["correct_score"]["graded"], 0)
         self.assertIn("Correct score (top 1)", result["by_market"])
         self.assertIsNotNone(result["by_market"]["Correct score (top 1)"]["baseline_brier_score"])

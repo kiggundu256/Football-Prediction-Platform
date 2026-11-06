@@ -230,7 +230,6 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     for match_date in sorted(daily_groups):
         day_rows = daily_groups[match_date]
         pending_market_calibration = defaultdict(list)
-        pending_market_events = defaultdict(list)
         for row in day_rows:
             home_key, away_key = _team_key(row["home_team"]), _team_key(row["away_team"])
             if not home_key or not away_key or home_key == away_key:
@@ -268,7 +267,6 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 calibration_samples[name].append((probability, observed))
                 raw_calibration_samples[name].append((raw_p, observed))
                 pending_market_calibration[name].append((raw_p, observed))
-                pending_market_events[name].append(observed)
             actual_outcome = 0 if actual_home > actual_away else (2 if actual_home < actual_away else 1)
             probabilities = [float(markets[key]) for key in ("home_win", "draw", "away_win")]
             predicted_outcome = max(range(3), key=lambda index: probabilities[index])
@@ -427,10 +425,45 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             market_calibration_training_counts[market_name] = sum(
                 item[0] for item in bins
             )
-        # Historical event-rate baselines also advance only after the date closes.
-        for market_name, outcomes in pending_market_events.items():
-            market_event_history[market_name][0] += len(outcomes)
-            market_event_history[market_name][1] += sum(int(value) for value in outcomes)
+        # Advance event-rate baselines from every valid completed fixture, even
+        # when the prediction model skipped it for insufficient team history.
+        # This remains date-safe: all forecasts for this date are already complete.
+        for row in day_rows:
+            actual_home, actual_away = int(row["home_goals"]), int(row["away_goals"])
+
+            def add_baseline_event(market_name, outcome):
+                market_event_history[market_name][0] += 1
+                market_event_history[market_name][1] += int(bool(outcome))
+
+            total_goals = actual_home + actual_away
+            for line in (1.5, 2.5, 3.5):
+                actual_over = total_goals > line
+                add_baseline_event(f"Over {line}", actual_over)
+                add_baseline_event(f"Under {line}", not actual_over)
+            actual_btts = actual_home > 0 and actual_away > 0
+            add_baseline_event("BTTS Yes", actual_btts)
+            add_baseline_event("BTTS No", not actual_btts)
+
+            try:
+                corner_data = json.loads(row["stats_json"] or "{}")
+                home_corners = float(corner_data["home_corners"])
+                away_corners = float(corner_data["away_corners"])
+            except (TypeError, ValueError, KeyError):
+                continue
+
+            total_corners = home_corners + away_corners
+            for line in (7.5, 8.5, 9.5, 10.5, 11.5):
+                actual_over = total_corners > line
+                add_baseline_event(f"Corners Over {line}", actual_over)
+                add_baseline_event(f"Corners Under {line}", not actual_over)
+            for prefix, observed in (
+                ("Home team corners", home_corners),
+                ("Away team corners", away_corners),
+            ):
+                for line in (2.5, 3.5, 4.5, 5.5, 6.5, 7.5):
+                    actual_over = observed > line
+                    add_baseline_event(f"{prefix} Over {line}", actual_over)
+                    add_baseline_event(f"{prefix} Under {line}", not actual_over)
 
         # Only results from the completed date become available to later dates.
         for row in day_rows:
@@ -530,7 +563,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "minimum_prior_samples": 30,
             "prior_strength": 30,
             "training_samples_by_market": dict(sorted(market_calibration_training_counts.items())),
-            "baseline": "Smoothed historical event rate for the same market using earlier dates only; 1X2 uses prior competition outcome rates; correct-score top-1 uses add-one-smoothed prior competition score frequencies over an 11x11 score grid.",
+            "baseline": "Smoothed historical event rate for the same market using all valid completed matches from earlier dates, including fixtures skipped by the prediction model; 1X2 uses prior competition outcome rates; correct-score top-1 uses add-one-smoothed prior competition score frequencies over an 11x11 score grid.",
             "sample_warnings": "Below 30 observations: low sample; 30–99: caution; 100+: adequate. Overconfidence flags require at least 30 observations.",
             "leakage_control": "Same-day outcomes enter calibration and baseline history only after every forecast for that date is complete.",
         },
