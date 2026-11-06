@@ -52,7 +52,7 @@ def _market_add(stats, name, predicted, actual, probability=None, brier_value=No
                 raw_probability=None, baseline_probability=None, baseline_brier_value=None):
     item = stats.setdefault(name, {
         "graded": 0, "correct": 0, "brier_sum": 0.0, "raw_brier_sum": 0.0,
-        "baseline_brier_sum": 0.0, "event_count": 0,
+        "baseline_brier_sum": 0.0, "baseline_graded": 0, "event_count": 0,
     })
     item["graded"] += 1
     correct = bool(predicted == actual)
@@ -62,6 +62,7 @@ def _market_add(stats, name, predicted, actual, probability=None, brier_value=No
         item["raw_brier_sum"] += float(brier_value)
         if baseline_brier_value is not None:
             item["baseline_brier_sum"] += float(baseline_brier_value)
+            item["baseline_graded"] += 1
     elif probability is not None:
         p = max(0.0, min(1.0, float(probability)))
         raw_p = p if raw_probability is None else max(0.0, min(1.0, float(raw_probability)))
@@ -71,6 +72,7 @@ def _market_add(stats, name, predicted, actual, probability=None, brier_value=No
         if baseline_probability is not None:
             baseline_p = max(0.0, min(1.0, float(baseline_probability)))
             item["baseline_brier_sum"] += (baseline_p - observed) ** 2
+            item["baseline_graded"] += 1
     if ("Over " in name or "Under " in name or name.startswith("BTTS ")
             or name.startswith("Corners ") or name.startswith("Home team corners ")
             or name.startswith("Away team corners ")) and isinstance(actual, bool):
@@ -124,11 +126,11 @@ def _finalize_market_stats(stats):
             "raw_brier_score": item["raw_brier_sum"] / item["graded"] if item["graded"] else None,
             "baseline_brier_score": (
                 item["baseline_brier_sum"] / item["graded"]
-                if item["graded"] and item["baseline_brier_sum"] else None
+                if item["baseline_graded"] else None
             ),
             "baseline_improvement": (
                 (item["baseline_brier_sum"] - item["brier_sum"]) / item["graded"]
-                if item["graded"] and item["baseline_brier_sum"] else None
+                if item["graded"] and item["baseline_graded"] == item["graded"] else None
             ),
             "sample_size_status": (
                 "LOW SAMPLE — do not rely" if item["graded"] < 30 else
