@@ -530,7 +530,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "minimum_prior_samples": 30,
             "prior_strength": 30,
             "training_samples_by_market": dict(sorted(market_calibration_training_counts.items())),
-            "baseline": "Smoothed historical event rate for the same market using earlier dates only.",
+            "baseline": "Smoothed historical event rate for the same market using earlier dates only; 1X2 uses prior competition outcome rates; correct-score top-1 uses add-one-smoothed prior competition score frequencies over an 11x11 score grid.",
             "sample_warnings": "Below 30 observations: low sample; 30–99: caution; 100+: adequate. Overconfidence flags require at least 30 observations.",
             "leakage_control": "Same-day outcomes enter calibration and baseline history only after every forecast for that date is complete.",
         },
@@ -558,9 +558,9 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "Chronological walk-forward; each match uses only completed matches dated before its match day. "
             "All fixtures on the same calendar day are forecast before any of that day's results are added. "
             "Current Poisson + recent-form weights are unchanged. The 1X2 benchmark is a smoothed "
-            "competition-level outcome-rate baseline using prior results only. No trained ML, odds, "
-            "injuries, lineups, referee or weather inputs are used in this historical test. "
-            "Corner-market probabilities are calibrated prequentially using only earlier-date results; "
-            "raw and calibrated Brier scores are reported separately."
+            "competition-level outcome-rate baseline using prior results only. Binary goals, BTTS and corner markets use separate "
+            "prequential calibrators and smoothed market-specific event-rate baselines. Correct-score top-1 is benchmarked against "
+            "prior competition score frequencies with add-one smoothing over an 11x11 score grid. No trained ML, odds, injuries, "
+            "lineups, referee or weather inputs are used in this historical test. Raw and calibrated Brier scores are reported separately."
         ),
     }
