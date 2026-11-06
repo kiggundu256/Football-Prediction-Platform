@@ -68,6 +68,16 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("Over 2.5", result["by_market"])
         self.assertIn("Under 2.5", result["by_market"])
         self.assertIn("BTTS No", result["by_market"])
+        # Goals and BTTS now use their own chronological calibration streams.
+        for market in ("Over 1.5", "Under 1.5", "Over 2.5", "BTTS Yes", "BTTS No"):
+            self.assertIn(market, result["calibration_by_market"])
+            self.assertIn(market, result["raw_calibration_by_market"])
+            self.assertIn("baseline_brier_score", result["by_market"][market])
+            self.assertIsNotNone(result["by_market"][market]["baseline_brier_score"])
+            self.assertEqual(result["by_market"][market]["sample_size_status"],
+                             "LOW SAMPLE — do not rely")
+        self.assertIn("minimum_prior_samples", result["market_calibration"])
+        self.assertIn("leakage_control", result["market_calibration"])
         self.assertGreater(result["brier_score_1x2"], 0)
         self.assertGreater(result["by_market"]["1X2"]["brier_score"], 0)
         self.assertAlmostEqual(
@@ -120,6 +130,13 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("raw_calibration_by_market", result)
         self.assertIn("corner_calibration", result)
         self.assertIn("leakage_control", result["corner_calibration"])
+        self.assertIn("baseline_brier_score", over)
+        self.assertEqual(over["sample_size_status"], "LOW SAMPLE — do not rely")
+        # Calibration reliability bins must expose signed probability gap and warning.
+        first_bin = result["calibration_by_market"]["Over 2.5"][0]
+        self.assertIn("signed_gap", first_bin)
+        self.assertIn("sample_size_status", first_bin)
+        self.assertFalse(first_bin["overconfident"])
         # Both fixtures share a date: neither can train the other. After the
         # date closes, both outcomes become available to later dates, so the
         # final running training count is two for each corner market.
