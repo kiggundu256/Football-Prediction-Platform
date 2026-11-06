@@ -3190,6 +3190,13 @@ class MainWindow(QMainWindow):
         self.backtest_calibration_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.backtest_calibration_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
         self.backtest_calibration_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        calibration_note = QLabel(
+            "Overconfidence gap = average predicted probability minus observed event rate. "
+            "A positive gap means overconfidence; flags require at least 30 observations in that confidence range. "
+            "Below 30 samples is low evidence; 30–99 is caution; 100+ is a stronger sample."
+        )
+        calibration_note.setWordWrap(True)
+        box.addWidget(calibration_note)
         self.backtest_calibration_table.setMaximumHeight(320)
         self.backtest_calibration_table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.backtest_calibration_table)
@@ -3355,7 +3362,7 @@ class MainWindow(QMainWindow):
             f"Pre-match calibration is applied separately to goals, BTTS and corner markets using earlier dates only "
             f"({result.get('market_calibration', {}).get('minimum_prior_samples', 30)} prior same-bin samples required; "
             f"{result.get('market_calibration', {}).get('prior_strength', 30)} pseudo-sample shrinkage). "
-            "Every binary market is benchmarked against its smoothed earlier-results event-rate baseline. "
+            "Every reported market is benchmarked against a suitable historical baseline. "
             "Sample warnings: below 30 = low; 30–99 = caution; 100+ = adequate. "
             "Overconfidence means average predicted probability exceeds observed frequency in a bin with at least 30 samples. "
             "The imported database and production prediction formula were not changed."
