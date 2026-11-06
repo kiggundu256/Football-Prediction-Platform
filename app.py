@@ -3392,7 +3392,7 @@ class MainWindow(QMainWindow):
                         f"{item.get('signed_gap', 0.0):+.1%}",
                         item.get("sample_size_status", "—"),
                         "OVERCONFIDENT" if item.get("overconfident") else (
-                            "Underconfident / aligned" if item.get("count", 0) >= 30 else "Insufficient sample"
+                            "No clear overconfidence" if item.get("count", 0) >= 30 else "Insufficient sample"
                         ),
                     ))
         for market_name, bins in result.get("raw_calibration_by_market", {}).items():
@@ -3405,7 +3405,7 @@ class MainWindow(QMainWindow):
                         f"{item.get('signed_gap', 0.0):+.1%}",
                         item.get("sample_size_status", "—"),
                         "OVERCONFIDENT" if item.get("overconfident") else (
-                            "Underconfident / aligned" if item.get("count", 0) >= 30 else "Insufficient sample"
+                            "No clear overconfidence" if item.get("count", 0) >= 30 else "Insufficient sample"
                         ),
                     ))
         self.backtest_calibration_table.setRowCount(len(calibration_rows))
