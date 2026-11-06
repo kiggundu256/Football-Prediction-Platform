@@ -216,6 +216,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     market_calibration_bins = defaultdict(lambda: [[0, 0] for _ in range(10)])
     market_calibration_training_counts = defaultdict(int)
     market_event_history = defaultdict(lambda: [0, 0])
+    score_baseline_history = defaultdict(lambda: {"matches": 0, "scores": defaultdict(int)})
     score_top1_correct = score_top5_correct = score_graded = 0
     corner_graded = 0
     skipped_insufficient_history = 0
@@ -348,9 +349,16 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                     score_top1_correct += int(top1_hit)
                     score_top5_correct += int(top5_hit)
                     calibration_samples["Correct score (top 1)"].append((top_score[2], top1_hit))
+                    score_league_key = (str(row["country"] or ""), str(row["competition"] or ""))
+                    score_history = score_baseline_history[score_league_key]
+                    score_key = (top_score[0], top_score[1])
+                    baseline_score_probability = (
+                        score_history["scores"][score_key] + 1.0
+                    ) / (score_history["matches"] + 121.0)
                     _market_add(
                         market_stats, "Correct score (top 1)", top1_hit, True,
                         brier_value=(top_score[2] - float(top1_hit)) ** 2,
+                        baseline_brier_value=(baseline_score_probability - float(top1_hit)) ** 2,
                     )
 
             total_goals = actual_home + actual_away
@@ -430,6 +438,9 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             actual_home, actual_away = int(row["home_goals"]), int(row["away_goals"])
             actual_outcome = 0 if actual_home > actual_away else (2 if actual_home < actual_away else 1)
             league_outcomes[league_key][actual_outcome] += 1
+            score_history = score_baseline_history[league_key]
+            score_history["matches"] += 1
+            score_history["scores"][(actual_home, actual_away)] += 1
 
         for row in day_rows:
             home_key, away_key = _team_key(row["home_team"]), _team_key(row["away_team"])
