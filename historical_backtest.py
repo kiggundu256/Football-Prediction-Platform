@@ -89,6 +89,17 @@ def _prequential_calibrate(probability, prior_samples, min_samples=30,
     return (observed_sum + int(prior_strength) * raw) / (len(matching) + int(prior_strength))
 
 
+def _prequential_calibrate_from_bins(probability, prior_bins, min_samples=30,
+                                    prior_strength=30, bin_count=10):
+    """O(1) equivalent of _prequential_calibrate using per-bin running totals."""
+    raw = max(0.0, min(1.0, float(probability)))
+    index = min(bin_count - 1, int(raw * bin_count))
+    count, observed_sum = prior_bins[index]
+    if count < int(min_samples):
+        return raw
+    return (observed_sum + int(prior_strength) * raw) / (count + int(prior_strength))
+
+
 def _finalize_market_stats(stats):
     output = {}
     for name, item in sorted(stats.items()):
@@ -166,7 +177,9 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     model_comparison = {}
     calibration_samples = defaultdict(list)
     raw_calibration_samples = defaultdict(list)
-    corner_calibration_history = defaultdict(list)
+    # Running raw-probability-bin counts avoid rescanning every prior match.
+    # Updates are deferred until the end of each date to preserve leakage control.
+    corner_calibration_bins = defaultdict(lambda: [[0, 0] for _ in range(10)])
     corner_calibration_training_counts = defaultdict(int)
     score_top1_correct = score_top5_correct = score_graded = 0
     corner_graded = 0
@@ -328,10 +341,12 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                         raw_probability = float(corner_forecast["over"][str(float(line))])
                         actual_over = actual_total_corners > line
                         name = f"Corners Over {line}"
-                        probability = _prequential_calibrate(
-                            raw_probability, corner_calibration_history[name]
+                        probability = _prequential_calibrate_from_bins(
+                            raw_probability, corner_calibration_bins[name]
                         )
-                        corner_calibration_training_counts[name] = len(corner_calibration_history[name])
+                        corner_calibration_training_counts[name] = sum(
+                            item[0] for item in corner_calibration_bins[name]
+                        )
                         _market_add(
                             market_stats, name, probability >= 0.5, actual_over, probability,
                             raw_probability=raw_probability,
@@ -358,10 +373,12 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                             raw_probability = float(corner_forecast[forecast_key][str(float(line))])
                             actual_over = observed > line
                             name = f"{prefix} Over {line}"
-                            probability = _prequential_calibrate(
-                                raw_probability, corner_calibration_history[name]
+                            probability = _prequential_calibrate_from_bins(
+                                raw_probability, corner_calibration_bins[name]
                             )
-                            corner_calibration_training_counts[name] = len(corner_calibration_history[name])
+                            corner_calibration_training_counts[name] = sum(
+                                item[0] for item in corner_calibration_bins[name]
+                            )
                             _market_add(
                                 market_stats, name, probability >= 0.5, actual_over, probability,
                                 raw_probability=raw_probability,
@@ -388,7 +405,15 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
 
         # Reveal this date's corner outcomes only after every same-day forecast.
         for market_name, samples in pending_corner_calibration.items():
-            corner_calibration_history[market_name].extend(samples)
+            bins = corner_calibration_bins[market_name]
+            for probability, outcome in samples:
+                raw_probability = max(0.0, min(1.0, float(probability)))
+                bin_index = min(9, int(raw_probability * 10))
+                bins[bin_index][0] += 1
+                bins[bin_index][1] += int(bool(outcome))
+            corner_calibration_training_counts[market_name] = sum(
+                item[0] for item in bins
+            )
 
         # Only results from the completed date become available to later dates.
         for row in day_rows:
