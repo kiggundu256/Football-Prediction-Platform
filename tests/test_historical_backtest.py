@@ -209,7 +209,7 @@ class HistoricalBacktestTests(unittest.TestCase):
         low_sample = _calibration_bins([(0.90, False)] * 29)
         low_bin = next(item for item in low_sample if item["count"])
         self.assertFalse(low_bin["overconfident"])
-        self.assertIsNone(low_bin["observed_rate_upper_95"] if low_bin["count"] == 0 else None)
+        self.assertIsNotNone(low_bin["observed_rate_upper_95"])
         self.assertIn("Insufficient sample", low_bin["overconfidence_evidence"])
 
     def test_binary_market_brier_scores_match_hand_calculation(self):
