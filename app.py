@@ -1805,7 +1805,10 @@ class MainWindow(QMainWindow):
         skipped = []
         for index, fixture in enumerate(fixtures):
             self.live_table.setCurrentCell(index, 0)
-            result = self.analyze_selected_fixture(automatic_scan=True)
+            try:
+                result = self.analyze_selected_fixture(automatic_scan=True)
+            except Exception as exc:
+                result = {"error": f"Analysis error: {exc}"}
             if not isinstance(result, dict) or not result.get("candidates"):
                 teams = fixture.get("teams") or {}
                 home = (teams.get("home") or {}).get("name", "Home")
