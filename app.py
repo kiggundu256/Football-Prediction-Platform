@@ -41,6 +41,7 @@ from csv_historical_importer import (HistoricalCsvImporter, scan_csv_folder, ins
 from historical_reconciliation import HistoricalReconciliation
 from data_quality import inspect_data_quality
 from player_intelligence import PlayerIntelligenceDatabase
+from automatic_market_scanner import build_market_candidates, rank_market_categories
 
 APP_NAME = ""
 KEYRING_SERVICE = "FootballPredictionPlatform"
@@ -1641,6 +1642,10 @@ class MainWindow(QMainWindow):
         self.analyze_fixture_button = QPushButton("Analyze Selected Match")
         self.analyze_fixture_button.clicked.connect(self.analyze_selected_fixture)
         controls.addWidget(self.analyze_fixture_button)
+        self.scan_all_button = QPushButton("Scan All Fixtures")
+        self.scan_all_button.setToolTip("Analyse every visible fixture using local historical data and rank its markets below.")
+        self.scan_all_button.clicked.connect(self.scan_all_fixtures)
+        controls.addWidget(self.scan_all_button)
         controls.addStretch()
         box.addLayout(controls)
 
@@ -1736,10 +1741,44 @@ class MainWindow(QMainWindow):
         intelligence_layout.addWidget(self.match_intelligence_scroll)
         self.live_content_splitter.addWidget(intelligence_panel)
 
-        self.live_content_splitter.setStretchFactor(0, 5)
-        self.live_content_splitter.setStretchFactor(1, 2)
-        self.live_content_splitter.setStretchFactor(2, 3)
-        self.live_content_splitter.setSizes([440, 150, 230])
+        # Automatic scanner is an inline, expandable work area rather than a pop-up.
+        self.scanner_panel = QWidget()
+        scanner_layout = QVBoxLayout(self.scanner_panel)
+        scanner_layout.setContentsMargins(4, 4, 4, 4)
+        scanner_heading = QLabel("AUTOMATIC MATCH SCANNER — RANKED MARKET CATEGORIES")
+        scanner_heading.setStyleSheet("font-size:13px;font-weight:800;color:#168BFF")
+        scanner_layout.addWidget(scanner_heading)
+        self.scanner_summary = QLabel("Load real fixtures, then select Scan All Fixtures. Results will be grouped by market and ranked by estimated probability.")
+        self.scanner_summary.setWordWrap(True)
+        self.scanner_summary.setStyleSheet("color:#AFC3DF;padding:4px;background:#111D30;border:1px solid #26364D;border-radius:6px")
+        scanner_layout.addWidget(self.scanner_summary)
+        scanner_filters = QHBoxLayout()
+        scanner_filters.addWidget(QLabel("Market category:"))
+        self.scanner_category = QComboBox()
+        self.scanner_category.addItem("Scan results will appear here")
+        self.scanner_category.currentTextChanged.connect(self.render_scanner_category)
+        scanner_filters.addWidget(self.scanner_category, 1)
+        scanner_layout.addLayout(scanner_filters)
+        self.scanner_table = QTableWidget(0, 6)
+        self.scanner_table.setHorizontalHeaderLabels(["Rank", "Fixture", "Selection", "Probability", "Historical reliability", "Notes / coverage"])
+        self.scanner_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.scanner_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.scanner_table.setAlternatingRowColors(True)
+        self.scanner_table.verticalHeader().setVisible(False)
+        self.scanner_table.setMinimumHeight(170)
+        self.scanner_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scanner_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scanner_table.horizontalHeader().setStretchLastSection(True)
+        enable_table_copy(self.scanner_table)
+        scanner_layout.addWidget(self.scanner_table, 1)
+        self.live_content_splitter.addWidget(self.scanner_panel)
+
+        self.live_content_splitter.setStretchFactor(0, 4)
+        self.live_content_splitter.setStretchFactor(1, 1)
+        self.live_content_splitter.setStretchFactor(2, 1)
+        self.live_content_splitter.setStretchFactor(3, 3)
+        self.live_content_splitter.setSizes([330, 95, 115, 280])
+        self.scanner_results = {}
         box.addWidget(self.live_content_splitter, 1)
         self.set_match_intelligence_sections({
             "Injuries & suspensions": ["Not loaded"],
@@ -1749,6 +1788,83 @@ class MainWindow(QMainWindow):
             "Corner data": ["Not loaded"],
         })
         return page
+
+    def scan_all_fixtures(self):
+        """Analyse visible fixtures from local history and render one ranked market workspace."""
+        if self.fixture_data_mode == "demo":
+            self.scanner_summary.setText("Demo fixtures are illustrative and are not scanned. Load real provider fixtures first.")
+            return
+        fixtures = list(self.visible_fixtures)
+        if not fixtures:
+            self.scanner_summary.setText("No visible fixtures to scan. Load fixtures or clear the current filters.")
+            return
+        self.scan_all_button.setEnabled(False)
+        self.scanner_summary.setText(f"Scanning {len(fixtures)} visible fixtures using the local historical database. No API requests are made by this scan…")
+        QApplication.processEvents()
+        all_candidates = []
+        skipped = []
+        for index, fixture in enumerate(fixtures):
+            self.live_table.setCurrentCell(index, 0)
+            result = self.analyze_selected_fixture(automatic_scan=True)
+            if not isinstance(result, dict) or not result.get("candidates"):
+                teams = fixture.get("teams") or {}
+                home = (teams.get("home") or {}).get("name", "Home")
+                away = (teams.get("away") or {}).get("name", "Away")
+                reason = result.get("error", "Insufficient local data") if isinstance(result, dict) else "Insufficient local data"
+                skipped.append(f"{home} vs {away}: {reason}")
+                continue
+            for candidate in result["candidates"]:
+                entry = dict(candidate)
+                entry["fixture"] = result["fixture"]
+                entry["note"] = "Local history: {} / {} recent matches. {}".format(
+                    result["home_history"], result["away_history"], entry.get("note", "")
+                ).strip()
+                all_candidates.append(entry)
+        self.scan_all_button.setEnabled(True)
+        self.scanner_results = rank_market_categories(all_candidates)
+        self.scanner_category.blockSignals(True)
+        self.scanner_category.clear()
+        for category in sorted(self.scanner_results):
+            self.scanner_category.addItem(category)
+        self.scanner_category.blockSignals(False)
+        scanned = len(fixtures) - len(skipped)
+        self.scanner_summary.setText(
+            f"SCAN COMPLETE  •  {scanned}/{len(fixtures)} fixtures analysed  •  "
+            f"{len(all_candidates):,} market selections ranked  •  {len(skipped)} skipped. "
+            "Probabilities are estimates, not guarantees. Goal-line markets derived from expected goals are NOT CALIBRATED; corner markets appear only where local corner history supports them."
+        )
+        if skipped:
+            self.scanner_summary.setToolTip("\n".join(skipped))
+        else:
+            self.scanner_summary.setToolTip("All visible fixtures had sufficient local historical results.")
+        self.render_scanner_category(self.scanner_category.currentText())
+        self.live_content_splitter.setSizes([260, 75, 90, 390])
+        self.api_message.setText(
+            f"Automatic scan complete: {scanned} analysed, {len(skipped)} skipped. "
+            "This scan used local history only and made no API requests."
+        )
+
+    def render_scanner_category(self, category):
+        if not hasattr(self, "scanner_table"):
+            return
+        rows = self.scanner_results.get(category, []) if category else []
+        self.scanner_table.setRowCount(len(rows))
+        for row, item in enumerate(rows):
+            fixture = item.get("fixture") or {}
+            values = [
+                item.get("rank", row + 1),
+                "{} vs {} • {}".format(fixture.get("home_team", ""), fixture.get("away_team", ""), fixture.get("competition", "")),
+                item.get("selection", ""),
+                "{:.1%}".format(item.get("probability", 0.0)),
+                item.get("reliability", "NOT CALIBRATED"),
+                item.get("note", ""),
+            ]
+            for column, value in enumerate(values):
+                cell = QTableWidgetItem(str(value))
+                self.scanner_table.setItem(row, column, cell)
+        self.scanner_table.resizeColumnsToContents()
+        self.scanner_table.setColumnWidth(1, 250)
+        self.scanner_table.setColumnWidth(5, 300)
 
     def set_match_intelligence_sections(self, sections):
         """Render match intelligence as independently headed, scrollable lists."""
@@ -2314,8 +2430,10 @@ class MainWindow(QMainWindow):
         )
         self.update_api_status()
 
-    def analyze_selected_fixture(self):
+    def analyze_selected_fixture(self, automatic_scan=False):
         if self.fixture_data_mode == "demo":
+            if automatic_scan:
+                return {"error": "Demo fixtures are not eligible for analysis."}
             QMessageBox.information(
                 self, "Demo fixture",
                 "This is sample data for testing the interface. Load provider fixtures before creating a real analysis."
@@ -2361,6 +2479,8 @@ class MainWindow(QMainWindow):
                 else:
                     away_recent = merged
             if not home_recent or not away_recent:
+                if automatic_scan:
+                    raise ApiFootballError("Insufficient local history for one or both teams; import more completed matches in Data Library.")
                 if not key:
                     raise ApiFootballError(
                         "Local history is incomplete for one or both teams. Set an API key or import their seasons in Data Library."
@@ -2390,7 +2510,7 @@ class MainWindow(QMainWindow):
                 h2h_matches = self.historical_db.head_to_head_matches_by_name(
                     home_name, away_name, fixture_date, limit=10
                 )
-            if not h2h_matches and key:
+            if not h2h_matches and key and not automatic_scan:
                 try:
                     h2h_matches = self.cached_provider_data(
                         f"h2h:{home_id}:{away_id}:{fixture_date}:10",
@@ -2406,8 +2526,10 @@ class MainWindow(QMainWindow):
             else:
                 h2h_error = None
         except ApiFootballError as exc:
-            QMessageBox.warning(self, "Form data unavailable", str(exc))
             self.api_message.setText(str(exc))
+            if automatic_scan:
+                return {"error": str(exc)}
+            QMessageBox.warning(self, "Form data unavailable", str(exc))
             return
         finally:
             QApplication.restoreOverrideCursor()
@@ -2466,12 +2588,15 @@ class MainWindow(QMainWindow):
         hr = team_profile(home_used, home_id)
         ar = team_profile(away_used, away_id)
         if not hr or not ar:
+            message = "Not enough completed local results with scores for both teams."
+            self.api_message.setText(message)
+            if automatic_scan:
+                return {"error": message}
             QMessageBox.information(
                 self, "Not enough results",
                 "The provider did not return enough completed matches with scores for both teams. "
                 "Try another fixture or date."
             )
-            self.api_message.setText("Not enough completed results with scores to calculate a form-based estimate.")
             return
 
         home_xg_seed = max(0.05, (hr["scored_avg"] + ar["conceded_avg"]) / 2)
@@ -2569,6 +2694,20 @@ class MainWindow(QMainWindow):
             [{"team_side": "home", "team_id": home_id, "match": match} for match in home_used]
             + [{"team_side": "away", "team_id": away_id, "match": match} for match in away_used]
         )
+        if automatic_scan:
+            candidates = build_market_candidates(
+                home_name, away_name, markets, home_xg, away_xg
+            )
+            return {
+                "fixture": {
+                    "home_team": home_name, "away_team": away_name,
+                    "competition": fixture_info["competition"],
+                    "fixture_id": fixture_info["fixture_id"],
+                },
+                "candidates": candidates,
+                "home_history": len(home_used),
+                "away_history": len(away_used),
+            }
         try:
             prediction_id = self.store.save_analysis(
                 fixture_info, home_xg, away_xg, markets, source_matches, h2h_matches,
