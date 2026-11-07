@@ -2759,7 +2759,11 @@ class MainWindow(QMainWindow):
                 f"Confidence band: {quality.get('confidence_band', 'Not assessed')}\\n"
                 f"Trained local ML: {'Active' if quality.get('trained_ml_model') else 'Waiting for 200 settled examples'}\\n"
                 f"Probability calibration: {(markets.get('calibration_status') or {}).get('state', 'NOT RUN')} — "
-                f"{(markets.get('calibration_status') or {}).get('message', 'No calibration status available')}"
+                f"{(markets.get('calibration_status') or {}).get('message', 'No calibration status available')}\\n"
+                f"Historical confidence reliability: " + "; ".join(
+                    f"{name}: {item.get('label')} (n={item.get('count', 0)})"
+                    for name, item in (markets.get('calibration_status') or {}).get('historical_reliability', {}).items()
+                )
             )
             quality_text.setWordWrap(True)
             quality_text.setTextInteractionFlags(selectable)

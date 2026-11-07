@@ -2,6 +2,7 @@ import unittest
 
 from probability_calibration import (
     calibrate_binary_probability, calibrate_1x2, apply_live_calibration,
+    assess_probability_reliability,
 )
 
 
@@ -58,6 +59,18 @@ class ProbabilityCalibrationTests(unittest.TestCase):
         self.assertAlmostEqual(result["btts_yes"] + result["btts_no"], 1.0)
         self.assertFalse(result["calibration_status"]["correct_score_calibrated"])
         self.assertEqual(markets["over"]["2.5"], 0.55)
+
+    def test_reliability_label_respects_sample_size_and_overconfidence(self):
+        bins = [{"count": 0, "signed_gap": None, "overconfident": False}
+                for _ in range(10)]
+        bins[6] = {"count": 20, "signed_gap": 0.25, "overconfident": False}
+        self.assertEqual(assess_probability_reliability(0.65, bins)["label"], "LOW SAMPLE")
+        bins[6] = {"count": 120, "signed_gap": 0.02, "overconfident": True}
+        self.assertEqual(assess_probability_reliability(0.65, bins)["label"], "OVERCONFIDENT")
+        bins[6] = {"count": 120, "signed_gap": -0.12, "overconfident": False}
+        self.assertEqual(assess_probability_reliability(0.65, bins)["label"], "UNDERCONFIDENT")
+        bins[6] = {"count": 150, "signed_gap": 0.03, "overconfident": False}
+        self.assertEqual(assess_probability_reliability(0.65, bins)["label"], "SUPPORTED")
 
     def test_missing_profile_is_explicitly_unavailable(self):
         result = apply_live_calibration(

@@ -38,6 +38,35 @@ def calibrate_1x2(probabilities, outcome_profiles, min_samples=30, prior_strengt
     return {key: value / total for key, value in zip(keys, calibrated)}, applied, samples
 
 
+def assess_probability_reliability(probability, reliability_bins):
+    """Describe the observed reliability of the probability's historical bin."""
+    raw = max(0.0, min(1.0, float(probability)))
+    bins = reliability_bins or []
+    index = min(9, int(raw * 10))
+    if len(bins) != 10:
+        return {"label": "NO PROFILE", "count": 0}
+    item = bins[index]
+    count = int(item.get("count", 0))
+    if count < 30:
+        label = "LOW SAMPLE"
+    elif item.get("overconfident"):
+        label = "OVERCONFIDENT"
+    elif item.get("signed_gap") is not None and item["signed_gap"] <= -0.10:
+        label = "UNDERCONFIDENT"
+    elif count < 100:
+        label = "CAUTION"
+    elif item.get("signed_gap") is not None and item["signed_gap"] >= 0.10:
+        label = "CALIBRATION GAP"
+    else:
+        label = "SUPPORTED"
+    return {
+        "label": label, "count": count,
+        "mean_probability": item.get("mean_probability"),
+        "observed_rate": item.get("observed_rate"),
+        "signed_gap": item.get("signed_gap"),
+    }
+
+
 def apply_live_calibration(markets, profile, min_samples=30, prior_strength=30):
     """Return a copied market payload with supported live probabilities calibrated."""
     result = deepcopy(markets)
@@ -95,6 +124,28 @@ def apply_live_calibration(markets, profile, min_samples=30, prior_strength=30):
     if corners:
         result["corners"] = corners
 
+    reliability_bins = profile.get("reliability") or {}
+    reliability_summary = {}
+    if "1X2 most-likely outcome" in reliability_bins:
+        reliability_summary["1X2"] = assess_probability_reliability(
+            max(result[key] for key in ("home_win", "draw", "away_win")),
+            reliability_bins["1X2 most-likely outcome"],
+        )
+    if "2.5" in (result.get("over") or {}) and "Over 2.5" in reliability_bins:
+        reliability_summary["Goals Over 2.5"] = assess_probability_reliability(
+            result["over"]["2.5"], reliability_bins["Over 2.5"]
+        )
+    if "btts_yes" in result and "BTTS Yes" in reliability_bins:
+        reliability_summary["BTTS Yes"] = assess_probability_reliability(
+            result["btts_yes"], reliability_bins["BTTS Yes"]
+        )
+    if "corners" in result and "Corners Over 9.5" in reliability_bins:
+        corner_probability = (result.get("corners", {}).get("over") or {}).get("9.5")
+        if corner_probability is not None:
+            reliability_summary["Corners Over 9.5"] = assess_probability_reliability(
+                corner_probability, reliability_bins["Corners Over 9.5"]
+            )
+
     any_applied = binary_applied > 0 or outcome_applied > 0
     result["calibration_status"] = {
         "state": "ACTIVE" if any_applied else "INSUFFICIENT HISTORY",
@@ -110,5 +161,6 @@ def apply_live_calibration(markets, profile, min_samples=30, prior_strength=30):
         "profile_from_year": profile.get("from_year"),
         "profile_latest_match_date": profile.get("source_latest_match_date"),
         "correct_score_calibrated": False,
+        "historical_reliability": reliability_summary,
     }
     return result

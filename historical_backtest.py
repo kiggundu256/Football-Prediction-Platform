@@ -666,6 +666,10 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             name: {"bins": bins, "training_samples": sum(item[0] for item in bins)}
             for name, bins in sorted(market_calibration_bins.items())
         },
+        "reliability": {
+            name: _calibration_bins(samples)
+            for name, samples in sorted(calibration_samples.items())
+        },
         "outcome_1x2": {
             name: {"bins": bins, "training_samples": sum(item[0] for item in bins)}
             for name, bins in outcome_calibration_bins.items()
