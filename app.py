@@ -1825,15 +1825,20 @@ class MainWindow(QMainWindow):
         all_candidates = []
         skipped = []
         for index, fixture in enumerate(fixtures):
+            teams = fixture.get("teams") or {}
+            home = (teams.get("home") or {}).get("name", "Home")
+            away = (teams.get("away") or {}).get("name", "Away")
+            self.scanner_summary.setText(
+                f"SCANNING {index + 1}/{len(fixtures)}  •  {home} vs {away}  •  "
+                f"{len(all_candidates):,} market selections collected  •  {len(skipped)} skipped"
+            )
+            QApplication.processEvents()
             self.live_table.setCurrentCell(index, 0)
             try:
                 result = self.analyze_selected_fixture(automatic_scan=True)
             except Exception as exc:
                 result = {"error": f"Analysis error: {exc}"}
             if not isinstance(result, dict) or not result.get("candidates"):
-                teams = fixture.get("teams") or {}
-                home = (teams.get("home") or {}).get("name", "Home")
-                away = (teams.get("away") or {}).get("name", "Away")
                 reason = result.get("error", "Insufficient local data") if isinstance(result, dict) else "Insufficient local data"
                 skipped.append(f"{home} vs {away}: {reason}")
                 continue
@@ -1844,6 +1849,11 @@ class MainWindow(QMainWindow):
                     result["home_history"], result["away_history"], entry.get("note", "")
                 ).strip()
                 all_candidates.append(entry)
+        self.scanner_summary.setText(
+            f"FINALISING RESULTS  •  {len(fixtures)}/{len(fixtures)} fixtures checked  •  "
+            f"{len(all_candidates):,} market selections collected"
+        )
+        QApplication.processEvents()
         self.scan_all_button.setEnabled(True)
         self.scanner_results = rank_market_categories(all_candidates)
         self.scanner_category.blockSignals(True)
