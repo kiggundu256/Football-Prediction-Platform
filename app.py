@@ -14,7 +14,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox, QSplitter, QTabWidget,
+    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox, QSplitter, QTabWidget, QLayout,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 )
 from api_football import (
@@ -353,19 +353,43 @@ class MainWindow(QMainWindow):
         self.warning.setStyleSheet("background:#302817;color:#F5B942;padding:10px;border:1px solid #725521;border-radius:7px")
         outer.addWidget(self.warning)
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.dashboard(), "Dashboard")
-        self.tabs.addTab(self.live_fixtures_page(), "Live Fixtures")
-        self.tabs.addTab(self.history_page(), "Prediction History")
-        self.tabs.addTab(self.performance(), "Performance Lab")
-        self.tabs.addTab(self.data_library_page(), "Data Library")
-        self.tabs.addTab(self.reconciliation_page(), "Reconciliation")
-        self.tabs.addTab(self.player_intelligence_page(), "Player Intelligence")
+        self.add_scrollable_tab(self.dashboard(), "Dashboard")
+        self.add_scrollable_tab(self.live_fixtures_page(), "Live Fixtures")
+        self.add_scrollable_tab(self.history_page(), "Prediction History")
+        self.add_scrollable_tab(self.performance(), "Performance Lab")
+        self.add_scrollable_tab(self.data_library_page(), "Data Library")
+        self.add_scrollable_tab(self.reconciliation_page(), "Reconciliation")
+        self.add_scrollable_tab(self.player_intelligence_page(), "Player Intelligence")
         outer.addWidget(self.tabs); self.setCentralWidget(root)
         self.refresh_history()
         self.update_api_status()
         self.restore_cached_fixtures()
         enable_text_selection(self)
 
+
+    def add_scrollable_tab(self, page, title):
+        """Give every main page a persistent right-side scrollbar and full-height content."""
+        if isinstance(page, QScrollArea):
+            scroll = page
+        else:
+            page_layout = page.layout()
+            if page_layout is not None:
+                page_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setWidget(page)
+        scroll.setWidgetResizable(True)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setStyleSheet(
+            "QScrollBar:vertical{background:#0B1422;width:14px;margin:2px 2px 2px 2px;}"
+            "QScrollBar::handle:vertical{background:#38516F;min-height:34px;border-radius:6px;}"
+            "QScrollBar::handle:vertical:hover{background:#168BFF;}"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}"
+            "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}"
+        )
+        self.tabs.addTab(scroll, title)
 
     def reconciliation_page(self):
         page = QWidget()
@@ -898,13 +922,7 @@ class MainWindow(QMainWindow):
         box.addWidget(self.library_detail_panel)
         self.refresh_data_library()
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setWidget(page)
-        return scroll
+        return page
 
     def run_data_quality_scan(self):
         """Display read-only integrity diagnostics for the local historical archive."""
@@ -3240,14 +3258,8 @@ class MainWindow(QMainWindow):
 
     def performance(self):
         page = QWidget()
-        page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        content = QWidget()
-        box = QVBoxLayout(content)
-        scroll.setWidget(content)
-        page_layout.addWidget(scroll)
+        box = QVBoxLayout(page)
+        box.setContentsMargins(0, 0, 0, 0)
         title = QLabel("Performance Lab")
         title.setStyleSheet("font-size:20px;font-weight:700;color:#EAF2FF")
         box.addWidget(title)
