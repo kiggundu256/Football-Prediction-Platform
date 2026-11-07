@@ -14,7 +14,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTabWidget,
+    QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox, QSplitter, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 )
 from api_football import (
@@ -1690,30 +1690,57 @@ class MainWindow(QMainWindow):
         self.live_table.horizontalHeader().setStretchLastSection(True)
         self.live_table.itemSelectionChanged.connect(self.update_fixture_details)
         enable_table_copy(self.live_table)
-        box.addWidget(self.live_table, 1)
+        # Resizable work area: drag the dividers to give any section more room.
+        self.live_content_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.live_content_splitter.setChildrenCollapsible(True)
+        self.live_content_splitter.setHandleWidth(8)
+        self.live_content_splitter.setStyleSheet(
+            "QSplitter::handle{background:#26364D;margin:2px 0;border-radius:3px;}"
+            "QSplitter::handle:hover{background:#168BFF;}"
+        )
 
+        self.live_table.setMinimumHeight(120)
+        self.live_content_splitter.addWidget(self.live_table)
+
+        details_panel = QWidget()
+        details_layout = QVBoxLayout(details_panel)
+        details_layout.setContentsMargins(0, 4, 0, 4)
+        details_heading = QLabel("SELECTED FIXTURE DETAILS")
+        details_heading.setStyleSheet("font-size:13px;font-weight:800;color:#168BFF")
+        details_layout.addWidget(details_heading)
         self.fixture_details = QLabel("Select a fixture to see its details.")
         self.fixture_details.setWordWrap(True)
+        self.fixture_details.setMinimumHeight(48)
         self.fixture_details.setStyleSheet(
             "background:#111D30;border:1px solid #26364D;border-radius:8px;"
             "padding:10px;color:#D7E3F5"
         )
-        box.addWidget(self.fixture_details)
+        details_layout.addWidget(self.fixture_details)
+        self.live_content_splitter.addWidget(details_panel)
 
+        intelligence_panel = QWidget()
+        intelligence_layout = QVBoxLayout(intelligence_panel)
+        intelligence_layout.setContentsMargins(0, 4, 0, 4)
         intelligence_heading = QLabel("MATCH INTELLIGENCE")
-        intelligence_heading.setStyleSheet("font-size:13px;font-weight:800;color:#168BFF;padding-top:5px")
-        box.addWidget(intelligence_heading)
+        intelligence_heading.setStyleSheet("font-size:13px;font-weight:800;color:#168BFF")
+        intelligence_layout.addWidget(intelligence_heading)
         self.match_intelligence_scroll = QScrollArea()
         self.match_intelligence_scroll.setWidgetResizable(True)
-        self.match_intelligence_scroll.setMinimumHeight(190)
-        self.match_intelligence_scroll.setMaximumHeight(280)
+        self.match_intelligence_scroll.setMinimumHeight(80)
         self.match_intelligence_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.match_intelligence_content = QWidget()
         self.match_intelligence_layout = QVBoxLayout(self.match_intelligence_content)
         self.match_intelligence_layout.setContentsMargins(8, 8, 8, 8)
         self.match_intelligence_layout.setSpacing(8)
         self.match_intelligence_scroll.setWidget(self.match_intelligence_content)
-        box.addWidget(self.match_intelligence_scroll)
+        intelligence_layout.addWidget(self.match_intelligence_scroll)
+        self.live_content_splitter.addWidget(intelligence_panel)
+
+        self.live_content_splitter.setStretchFactor(0, 5)
+        self.live_content_splitter.setStretchFactor(1, 2)
+        self.live_content_splitter.setStretchFactor(2, 3)
+        self.live_content_splitter.setSizes([440, 150, 230])
+        box.addWidget(self.live_content_splitter, 1)
         self.set_match_intelligence_sections({
             "Injuries & suspensions": ["Not loaded"],
             "Expected lineups": ["Not loaded"],
@@ -1843,7 +1870,23 @@ class MainWindow(QMainWindow):
                 f"Injuries & suspensions: Not loaded  •  Expected lineups: Not loaded  •  "
                 f"Referee: {referee}  •  Weather: Not loaded  •  Corner data: Not loaded"
             )
-        self.match_intelligence.setText(intelligence)
+        if self.fixture_data_mode == "demo":
+            self.set_match_intelligence_sections({
+                "Demo data": ["No real match intelligence is attached to sample fixtures."],
+                "Injuries & suspensions": ["Not available in demo mode"],
+                "Expected lineups": ["Not available in demo mode"],
+                "Referee": ["Sample fixture only"],
+                "Weather": ["Not available in demo mode"],
+                "Corner data": ["Not available in demo mode"],
+            })
+        else:
+            self.set_match_intelligence_sections({
+                "Fixture information": [f"Referee: {referee}"],
+                "Injuries & suspensions": ["Not loaded"],
+                "Expected lineups": ["Not loaded"],
+                "Weather": ["Not loaded"],
+                "Corner data": ["Not loaded"],
+            })
 
     def get_api_key(self):
         try:
