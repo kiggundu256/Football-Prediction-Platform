@@ -49,7 +49,8 @@ def _corner_averages(history):
 
 
 def _market_add(stats, name, predicted, actual, probability=None, brier_value=None,
-                raw_probability=None, baseline_probability=None, baseline_brier_value=None):
+                raw_probability=None, baseline_probability=None, baseline_brier_value=None,
+                raw_brier_value=None):
     item = stats.setdefault(name, {
         "graded": 0, "correct": 0, "brier_sum": 0.0, "raw_brier_sum": 0.0,
         "baseline_brier_sum": 0.0, "baseline_graded": 0, "event_count": 0,
@@ -59,7 +60,9 @@ def _market_add(stats, name, predicted, actual, probability=None, brier_value=No
     item["correct"] += int(correct)
     if brier_value is not None:
         item["brier_sum"] += float(brier_value)
-        item["raw_brier_sum"] += float(brier_value)
+        item["raw_brier_sum"] += float(
+            brier_value if raw_brier_value is None else raw_brier_value
+        )
         if baseline_brier_value is not None:
             item["baseline_brier_sum"] += float(baseline_brier_value)
             item["baseline_graded"] += 1
@@ -246,6 +249,13 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     # Updates are deferred until the end of each date to preserve leakage control.
     market_calibration_bins = defaultdict(lambda: [[0, 0] for _ in range(10)])
     market_calibration_training_counts = defaultdict(int)
+    # One-vs-rest 1X2 calibration; results from a date are withheld until all
+    # forecasts for that date have been generated.
+    outcome_calibration_bins = {
+        name: [[0, 0] for _ in range(10)]
+        for name in ("home_win", "draw", "away_win")
+    }
+    pending_outcome_calibration = defaultdict(list)
     market_event_history = defaultdict(lambda: [0, 0])
     score_baseline_history = defaultdict(lambda: {"matches": 0, "scores": defaultdict(int)})
     score_top1_correct = score_top5_correct = score_graded = 0
@@ -299,12 +309,30 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 raw_calibration_samples[name].append((raw_p, observed))
                 pending_market_calibration[name].append((raw_p, observed))
             actual_outcome = 0 if actual_home > actual_away else (2 if actual_home < actual_away else 1)
-            probabilities = [float(markets[key]) for key in ("home_win", "draw", "away_win")]
+            outcome_keys = ("home_win", "draw", "away_win")
+            raw_probabilities = [float(markets[key]) for key in outcome_keys]
+            raw_predicted_outcome = max(range(3), key=lambda index: raw_probabilities[index])
+            probabilities = [
+                _prequential_calibrate_from_bins(
+                    raw_probability, outcome_calibration_bins[key]
+                )
+                for key, raw_probability in zip(outcome_keys, raw_probabilities)
+            ]
+            calibrated_total = sum(probabilities)
+            probabilities = (
+                [value / calibrated_total for value in probabilities]
+                if calibrated_total > 0 else list(raw_probabilities)
+            )
+            calibrated_ensemble = dict(zip(outcome_keys, probabilities))
             predicted_outcome = max(range(3), key=lambda index: probabilities[index])
+            for key, raw_probability in zip(outcome_keys, raw_probabilities):
+                pending_outcome_calibration[key].append(
+                    (raw_probability, key == outcome_keys[actual_outcome])
+                )
             component_models = {
                 "Goal distribution": forecast.get("goal_model", {}),
                 "Recent form": forecast.get("form_model", {}),
-                "Ensemble": markets,
+                "Ensemble": calibrated_ensemble,
             }
             for model_name, component in component_models.items():
                 try:
@@ -351,12 +379,19 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             log_loss_sum += model_loss
             baseline_brier_sum += baseline_brier
             baseline_log_loss_sum += baseline_loss
+            raw_model_brier = sum(
+                (raw_probabilities[i] - actual_vector[i]) ** 2 for i in range(3)
+            ) / 3.0
             _market_add(
                 market_stats, "1X2", predicted_outcome, actual_outcome,
-                brier_value=model_brier, baseline_brier_value=baseline_brier,
+                brier_value=model_brier, raw_brier_value=raw_model_brier,
+                baseline_brier_value=baseline_brier,
             )
             calibration_samples["1X2 most-likely outcome"].append(
                 (max(probabilities), predicted_outcome == actual_outcome)
+            )
+            raw_calibration_samples["1X2 most-likely outcome"].append(
+                (max(raw_probabilities), raw_predicted_outcome == actual_outcome)
             )
 
             # Correct-score evaluation uses the unchanged Poisson score matrix.
@@ -456,6 +491,13 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             market_calibration_training_counts[market_name] = sum(
                 item[0] for item in bins
             )
+        for outcome_name, samples in pending_outcome_calibration.items():
+            bins = outcome_calibration_bins[outcome_name]
+            for probability, outcome in samples:
+                bin_index = min(9, int(max(0.0, min(1.0, float(probability))) * 10))
+                bins[bin_index][0] += 1
+                bins[bin_index][1] += int(bool(outcome))
+        pending_outcome_calibration.clear()
         # Advance event-rate baselines from every valid completed fixture, even
         # when the prediction model skipped it for insufficient team history.
         # This remains date-safe: all forecasts for this date are already complete.
@@ -565,9 +607,78 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "assessment": assessment,
         })
 
+    # Aggregate across seasons to distinguish persistent competition weaknesses
+    # from a single poor campaign. Only seasons with >=100 matches count as
+    # evidence for the repeated-season assessment.
+    competition_totals = defaultdict(lambda: {
+        "seasons": 0, "matches": 0, "seasons_beating": 0,
+        "seasons_needing_attention": 0, "model_brier_sum": 0.0,
+        "baseline_brier_sum": 0.0, "model_log_loss_sum": 0.0,
+        "baseline_log_loss_sum": 0.0,
+    })
+    for item in groups:
+        parts = item["competition_season"].split(" | ")
+        competition_name = " | ".join(parts[:2]) if len(parts) >= 3 else item["competition_season"]
+        total = competition_totals[competition_name]
+        total["seasons"] += 1
+        total["matches"] += item["matches"]
+        total["model_brier_sum"] += item["brier_score"] * item["matches"]
+        total["baseline_brier_sum"] += item["baseline_brier_score"] * item["matches"]
+        total["model_log_loss_sum"] += item["log_loss"] * item["matches"]
+        total["baseline_log_loss_sum"] += item["baseline_log_loss"] * item["matches"]
+        if item["matches"] >= 100 and item["assessment"] == "Beats baseline":
+            total["seasons_beating"] += 1
+        elif item["matches"] >= 100 and item["assessment"] == "Needs attention":
+            total["seasons_needing_attention"] += 1
+    competition_diagnostics = []
+    for name, item in sorted(competition_totals.items()):
+        n = item["matches"]
+        model_brier = item["model_brier_sum"] / n
+        baseline_brier = item["baseline_brier_sum"] / n
+        model_loss = item["model_log_loss_sum"] / n
+        baseline_loss = item["baseline_log_loss_sum"] / n
+        eligible = item["seasons_beating"] + item["seasons_needing_attention"]
+        persistent_weakness = (
+            eligible >= 2 and item["seasons_needing_attention"] >= 2
+            and model_brier > baseline_brier and model_loss > baseline_loss
+        )
+        competition_diagnostics.append({
+            "competition": name, "seasons": item["seasons"], "matches": n,
+            "eligible_seasons": eligible,
+            "seasons_beating_baseline": item["seasons_beating"],
+            "seasons_needing_attention": item["seasons_needing_attention"],
+            "model_brier": model_brier, "baseline_brier": baseline_brier,
+            "model_log_loss": model_loss, "baseline_log_loss": baseline_loss,
+            "assessment": (
+                "Persistent underperformance" if persistent_weakness else
+                "Generally beats baseline" if eligible >= 2 and item["seasons_beating"] >= 2 else
+                "Mixed / insufficient evidence"
+            ),
+        })
+
+    source_latest_match_date = max((str(row["match_date"]) for row in rows), default=None)
+    live_calibration_profile = {
+        "version": 1, "from_year": int(from_year),
+        "minimum_history": int(minimum_history),
+        "source_completed_matches": len(rows),
+        "source_latest_match_date": source_latest_match_date,
+        "markets": {
+            name: {"bins": bins, "training_samples": sum(item[0] for item in bins)}
+            for name, bins in sorted(market_calibration_bins.items())
+        },
+        "outcome_1x2": {
+            name: {"bins": bins, "training_samples": sum(item[0] for item in bins)}
+            for name, bins in outcome_calibration_bins.items()
+        },
+    }
+
     return {
         "from_year": int(from_year), "minimum_history": int(minimum_history),
-        "source_completed_matches": len(rows), "evaluated_matches": evaluated,
+        "source_completed_matches": len(rows),
+        "source_latest_match_date": source_latest_match_date,
+        "live_calibration_profile": live_calibration_profile,
+        "competition_diagnostics": competition_diagnostics,
+        "evaluated_matches": evaluated,
         "skipped_insufficient_history": skipped_insufficient_history,
         "accuracy_1x2": market_stats["1X2"]["correct"] / market_stats["1X2"]["graded"],
         "brier_score_1x2": brier_sum / evaluated,
@@ -589,14 +700,19 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             name: _calibration_bins(samples) for name, samples in sorted(raw_calibration_samples.items())
         },
         "market_calibration": {
-            "markets": "Goals, BTTS and all corner totals/team markets",
-            "method": "Separate prequential raw-probability-bin calibration for each binary market.",
+            "markets": "1X2, goals, BTTS and all corner totals/team markets",
+            "method": "Separate prequential raw-probability-bin calibration for binary markets plus one-vs-rest 1X2 class calibration.",
             "minimum_prior_samples": 30,
             "prior_strength": 30,
             "training_samples_by_market": dict(sorted(market_calibration_training_counts.items())),
             "baseline": "Smoothed historical event rate for the same market using all valid completed matches from earlier dates, including fixtures skipped by the prediction model; 1X2 uses prior competition outcome rates; correct-score top-1 uses add-one-smoothed prior competition score frequencies over an 11x11 score grid.",
             "sample_warnings": "Below 30 observations: low sample; 30–99: caution; 100+: adequate. Overconfidence flags require at least 30 observations and the mean predicted probability to exceed the observed-rate 95% Wilson upper confidence bound.",
             "leakage_control": "Same-day outcomes enter calibration and baseline history only after every forecast for that date is complete.",
+            "one_x_two_method": "Calibrate home, draw and away probabilities independently against prior one-vs-rest outcomes, then renormalize to 100%.",
+            "one_x_two_training_samples_by_outcome": {
+                name: sum(item[0] for item in bins)
+                for name, bins in outcome_calibration_bins.items()
+            },
         },
         "corner_calibration": {
             "method": "Prequential calibration retained within the generalized market calibration layer.",
@@ -621,7 +737,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         "methodology": (
             "Chronological walk-forward; each match uses only completed matches dated before its match day. "
             "All fixtures on the same calendar day are forecast before any of that day's results are added. "
-            "Current Poisson + recent-form weights are unchanged. The 1X2 benchmark is a smoothed "
+            "Current Poisson + recent-form weights are unchanged. 1X2 probabilities receive one-vs-rest " 
+            "prequential calibration before scoring. The 1X2 benchmark is a smoothed "
             "competition-level outcome-rate baseline using prior results only. Binary goals, BTTS and corner markets use separate "
             "prequential calibrators and smoothed market-specific event-rate baselines. Correct-score top-1 is benchmarked against "
             "prior competition score frequencies with add-one smoothing over an 11x11 score grid. No trained ML, odds, injuries, "

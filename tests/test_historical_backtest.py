@@ -103,6 +103,16 @@ class HistoricalBacktestTests(unittest.TestCase):
             )
         self.assertGreater(result["brier_score_1x2"], 0)
         self.assertGreater(result["by_market"]["1X2"]["brier_score"], 0)
+        self.assertIn("raw_brier_score", result["by_market"]["1X2"])
+        self.assertIn("one_x_two_training_samples_by_outcome", result["market_calibration"])
+        self.assertEqual(
+            result["market_calibration"]["one_x_two_training_samples_by_outcome"],
+            {"home_win": 2, "draw": 2, "away_win": 2},
+        )
+        self.assertEqual(result["live_calibration_profile"]["version"], 1)
+        self.assertEqual(result["live_calibration_profile"]["source_completed_matches"], 7)
+        self.assertEqual(result["source_latest_match_date"], "2020-08-20")
+        self.assertIn("competition_diagnostics", result)
         self.assertAlmostEqual(
             result["by_market"]["1X2"]["brier_score"],
             result["brier_score_1x2"],

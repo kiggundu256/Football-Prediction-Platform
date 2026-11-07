@@ -34,6 +34,7 @@ from ui_theme import APP_STYLESHEET
 from settlement import settle_markets
 from performance_metrics import summarize_performance
 from historical_backtest import run_historical_backtest
+from probability_calibration import apply_live_calibration
 from fixture_view import filter_fixtures, competition_options, fixture_status_group
 from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
 from csv_historical_importer import (HistoricalCsvImporter, scan_csv_folder, inspect_csv_file, _stable_id, _season_start)
@@ -2480,6 +2481,40 @@ class MainWindow(QMainWindow):
                 markets["corner_data_status"] = "Insufficient valid historical corner data"
         else:
             markets["corner_data_status"] = "Not loaded — use Load Match Intelligence first"
+
+        # Reuse a walk-forward calibration profile only when its source snapshot
+        # still matches the local completed-match database.
+        calibration_profile = self.store.get_provider_cache("live_calibration_profile")
+        calibration_current = False
+        if calibration_profile:
+            profile_year = int(calibration_profile.get("from_year", 2020))
+            with self.store.connect() as calibration_db:
+                signature = calibration_db.execute("""
+                    SELECT COUNT(*), MAX(match_date)
+                    FROM historical_matches
+                    WHERE match_date >= ? AND status IN ('FT','AET','PEN')
+                      AND home_goals IS NOT NULL AND away_goals IS NOT NULL
+                      AND trim(COALESCE(home_team,'')) != ''
+                      AND trim(COALESCE(away_team,'')) != ''
+                """, (f"{profile_year:04d}-01-01",)).fetchone()
+            calibration_current = bool(
+                signature
+                and int(signature[0] or 0) == int(calibration_profile.get("source_completed_matches", -1))
+                and (signature[1] or None) == calibration_profile.get("source_latest_match_date")
+            )
+        if calibration_current:
+            markets = apply_live_calibration(markets, calibration_profile)
+        else:
+            markets = apply_live_calibration(markets, None)
+            markets["calibration_status"]["state"] = (
+                "STALE PROFILE" if calibration_profile else "NOT RUN"
+            )
+            markets["calibration_status"]["message"] = (
+                "Historical data changed after calibration. Run Historical Backtest again; current probabilities remain raw."
+                if calibration_profile else
+                "Run Historical Backtest to build a validated live calibration profile. Current probabilities are raw."
+            )
+        ensemble["markets"] = markets
         fixture_info = {
             "competition": (item.get("league") or {}).get("name", "Unknown"),
             "home_team": home_name,
@@ -2722,7 +2757,9 @@ class MainWindow(QMainWindow):
                 f"Models: {markets.get('model', 'Poisson baseline')}\\n"
                 f"Completed matches per team: {quality.get('minimum_team_sample', 0)}\\n"
                 f"Confidence band: {quality.get('confidence_band', 'Not assessed')}\\n"
-                f"Trained local ML: {'Active' if quality.get('trained_ml_model') else 'Waiting for 200 settled examples'}"
+                f"Trained local ML: {'Active' if quality.get('trained_ml_model') else 'Waiting for 200 settled examples'}\\n"
+                f"Probability calibration: {(markets.get('calibration_status') or {}).get('state', 'NOT RUN')} — "
+                f"{(markets.get('calibration_status') or {}).get('message', 'No calibration status available')}"
             )
             quality_text.setWordWrap(True)
             quality_text.setTextInteractionFlags(selectable)
@@ -3404,6 +3441,10 @@ class MainWindow(QMainWindow):
             self.backtest_methodology.setText(result.get("methodology", ""))
             return
 
+        calibration_profile = result.get("live_calibration_profile")
+        if calibration_profile:
+            self.store.save_provider_cache("live_calibration_profile", calibration_profile)
+
         model_brier = result["brier_score_1x2"]
         baseline_brier = result["baseline_brier_score_1x2"]
         model_loss = result["log_loss_1x2"]
@@ -3431,7 +3472,7 @@ class MainWindow(QMainWindow):
         self.backtest_status.setText(
             f"Completed: {result['evaluated_matches']:,} historical matches evaluated from {result['from_year']} onward. "
             f"Corner market selections graded: {result.get('corner_market_predictions', 0):,}. "
-            f"Pre-match calibration is applied separately to goals, BTTS and corner markets using earlier dates only "
+            f"Pre-match calibration covers 1X2, goals, BTTS and corner markets using earlier dates only "
             f"({result.get('market_calibration', {}).get('minimum_prior_samples', 30)} prior same-bin samples required; "
             f"{result.get('market_calibration', {}).get('prior_strength', 30)} pseudo-sample shrinkage). "
             "Every reported market is benchmarked against a suitable historical baseline. "
@@ -3540,11 +3581,23 @@ class MainWindow(QMainWindow):
             for item in weak
         ) or "No competition-season was worse than the baseline on both metrics."
         mixed_count = sum(1 for item in eligible if item.get("assessment") == "Mixed results")
+        diagnostics = result.get("competition_diagnostics", [])
+        persistent_weak = [
+            item for item in diagnostics
+            if item.get("assessment") == "Persistent underperformance"
+            and item.get("matches", 0) >= 300
+        ]
+        persistent_text = "; ".join(
+            f"{item['competition']} ({item['seasons_needing_attention']}/{item['eligible_seasons']} eligible seasons)"
+            for item in persistent_weak[:8]
+        ) or "No persistent underperformance established with the current sample."
         self.backtest_comp_summary.setText(
             f"STRONGEST (beats baseline on both Brier and log loss): {strong_text}\\n"
             f"NEEDS ATTENTION (worse on both): {weak_text}\\n"
+            f"PERSISTENT COMPETITION WEAKNESS: {persistent_text}\\n"
             f"Mixed results: {mixed_count} competition-seasons. "
-            "Highlights require at least 100 evaluated matches; all sample sizes remain visible above."
+            "Persistent weakness requires at least two eligible seasons and aggregate underperformance; "
+            "individual seasons with fewer than 100 matches are not used for this diagnosis."
         )
         self.backtest_methodology.setText(result.get("methodology", ""))
 
