@@ -61,9 +61,16 @@ class IntelligentScannerTests(unittest.TestCase):
                 },
             ]
             database.upsert_fixtures(fixtures)
-            worker = IntelligentScannerWorker([], database.path, [], None, mode="fast")
+            scan_fixture = {
+                "fixture": {"date": "2024-01-01T15:00:00+00:00"},
+                "teams": {"home": {"id": 1, "name": "Home"}, "away": {"id": 2, "name": "Other"}},
+            }
+            worker = IntelligentScannerWorker([scan_fixture], database.path, [], None, mode="fast")
             worker._history_cache = {}
-            history = worker._load_team_history(database, {"id": 1, "name": "Home"}, "2024-01-01", worker._history_cache)
+            worker._prefetch_histories(database)
+            history = worker._load_team_history(
+                database, {"id": 1, "name": "Home"}, "2024-01-01", worker._history_cache
+            )
             self.assertEqual([item["fixture"]["id"] for item in history], [1])
 
     def test_fast_scan_never_calls_provider_enrichment_and_keeps_partial_results(self):
