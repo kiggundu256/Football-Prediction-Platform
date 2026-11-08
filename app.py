@@ -1852,15 +1852,26 @@ class MainWindow(QMainWindow):
             self.scanner_results = rank_market_categories(all_candidates)
             self.scanner_category.blockSignals(True)
             self.scanner_category.clear()
-            for category in sorted(self.scanner_results):
+            categories = sorted(self.scanner_results)
+            if "TOP PICKS — VALIDATED" in categories:
+                categories.remove("TOP PICKS — VALIDATED")
+                categories.insert(0, "TOP PICKS — VALIDATED")
+            for category in categories:
                 self.scanner_category.addItem(category)
             self.scanner_category.blockSignals(False)
             self.render_scanner_category(self.scanner_category.currentText())
             self.live_content_splitter.setSizes([260, 75, 90, 390])
             scanned = completed
+            top_pick_count = len(self.scanner_results.get("TOP PICKS — VALIDATED", []))
+            top_pick_note = (
+                f" {top_pick_count} validated picks passed the 60% probability and historical-reliability screen."
+                if top_pick_count else
+                " No picks passed the 60% probability and historical-reliability screen; inspect the market categories for exploratory forecasts."
+            )
             self.scanner_summary.setText(
                 f"{status}  •  {scanned}/{len(fixtures)} fixtures analysed  •  "
                 f"{len(all_candidates):,} market selections retained  •  {len(skipped)} skipped."
+                + top_pick_note
             )
             self.scanner_summary.setToolTip("\n".join(skipped) if skipped else
                 "Completed fixture results are retained in this session.")
@@ -1923,6 +1934,18 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "scanner_table"):
             return
         rows = self.scanner_results.get(category, []) if category else []
+        if category == "TOP PICKS — VALIDATED" and not rows:
+            self.scanner_table.setRowCount(1)
+            self.scanner_table.setItem(
+                0, 0,
+                QTableWidgetItem(
+                    "No validated picks yet. This shortlist requires a current calibration profile, "
+                    "at least 30 historical observations in the relevant confidence range, and probability of 60% or higher."
+                ),
+            )
+            self.scanner_table.setSpan(0, 0, 1, self.scanner_table.columnCount())
+            return
+        self.scanner_table.clearSpans()
         self.scanner_table.setRowCount(len(rows))
         for row, item in enumerate(rows):
             fixture = item.get("fixture") or {}
