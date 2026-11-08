@@ -1852,6 +1852,7 @@ class MainWindow(QMainWindow):
         self._scanner_context = {
             "history": {}, "training_loaded": False, "training_model": None,
             "started": time.perf_counter(), "analysis_seconds": 0.0,
+            "history_seconds": 0.0, "training_seconds": 0.0,
         }
 
         def publish_results(status):
@@ -1880,7 +1881,9 @@ class MainWindow(QMainWindow):
             self.scanner_summary.setText(
                 f"{status}  •  {scanned}/{len(fixtures)} fixtures analysed  •  "
                 f"{len(all_candidates):,} market selections retained  •  {len(skipped)} skipped. "
-                f"Speed: {rate:.1f} fixtures/min; average analysis {average:.2f}s/fixture."
+                f"Speed: {rate:.1f} fixtures/min; average analysis {average:.2f}s/fixture; "
+                f"history {self._scanner_context['history_seconds']:.1f}s; "
+                f"model training {self._scanner_context['training_seconds']:.1f}s."
                 + top_pick_note
             )
             self.scanner_summary.setToolTip("\n".join(skipped) if skipped else
@@ -1907,10 +1910,14 @@ class MainWindow(QMainWindow):
                     f"{len(all_candidates):,} selections collected  •  {len(skipped)} skipped"
                 )
                 self.live_table.setCurrentCell(index, 0)
+                fixture_started = time.perf_counter()
                 try:
                     result = self.analyze_selected_fixture(automatic_scan=True)
                 except Exception as exc:
                     result = {"error": f"Analysis error: {exc}"}
+                fixture_elapsed = time.perf_counter() - fixture_started
+                if not (isinstance(result, dict) and result.get("cancelled")):
+                    self._scanner_context["analysis_seconds"] += fixture_elapsed
                 QApplication.processEvents()
                 if isinstance(result, dict) and result.get("cancelled"):
                     break
@@ -2580,7 +2587,9 @@ class MainWindow(QMainWindow):
                     return loader()
                 cache = scan_context["history"]
                 if cache_key not in cache:
+                    started = time.perf_counter()
                     cache[cache_key] = loader()
+                    scan_context["history_seconds"] += time.perf_counter() - started
                 return cache[cache_key]
 
             home_recent = cached_history(
@@ -2755,7 +2764,9 @@ class MainWindow(QMainWindow):
         model_features = build_model_features(hr, ar, home_xg_seed, away_xg_seed)
         if automatic_scan and scan_context is not None:
             if not scan_context["training_loaded"]:
+                training_started = time.perf_counter()
                 scan_context["training_model"] = train_outcome_model(self.store.training_records())
+                scan_context["training_seconds"] += time.perf_counter() - training_started
                 scan_context["training_loaded"] = True
             local_ml = scan_context["training_model"]
         else:
