@@ -48,6 +48,10 @@ class AutomaticMarketScannerTests(unittest.TestCase):
             "fixture_id": 101, "home_team": "Home", "away_team": "Away",
             "competition": "Test League",
         }
+        second_fixture = {
+            "fixture_id": 102, "home_team": "Home B", "away_team": "Away B",
+            "competition": "Test League",
+        }
         candidates = [
             {"category": "Match Result (1X2)", "selection": "Home win",
              "probability": 0.68, "reliability": "SUPPORTED (n=140)", "fixture": fixture},
@@ -56,7 +60,7 @@ class AutomaticMarketScannerTests(unittest.TestCase):
             {"category": "Match Result (1X2)", "selection": "Away win",
              "probability": 0.12, "reliability": "SUPPORTED (n=140)", "fixture": fixture},
             {"category": "Both Teams To Score", "selection": "Yes",
-             "probability": 0.64, "reliability": "CAUTION (n=65)", "fixture": fixture},
+             "probability": 0.64, "reliability": "CAUTION (n=65)", "fixture": second_fixture},
             {"category": "Total Goals", "selection": "Over 2.5",
              "probability": 0.82, "reliability": "OVERCONFIDENT (n=220)", "fixture": fixture},
             {"category": "Total Corners", "selection": "Over 9.5",
