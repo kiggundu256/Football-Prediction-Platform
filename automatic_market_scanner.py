@@ -137,13 +137,75 @@ def build_market_candidates(home_name, away_name, markets, home_xg, away_xg):
     return result
 
 
-def rank_market_categories(candidates):
-    """Group candidates and rank each market from highest estimated probability."""
-    grouped = {}
+def _validated_top_picks(candidates, minimum_probability=0.60, limit=20):
+    """Select cross-market picks only where live calibration has adequate support.
+
+    The current reliability profile validates 1X2 most-likely outcomes, BTTS Yes,
+    Over 2.5 goals and total Corners Over 9.5. Other markets remain available in
+    their category tables but are not promoted as validated picks.
+    """
+    eligible = []
+    best_1x2 = {}
     for item in candidates or []:
-        grouped.setdefault(item["category"], []).append(dict(item))
+        category = item.get("category")
+        selection = item.get("selection")
+        if category == "Match Result (1X2)":
+            fixture = item.get("fixture") or {}
+            key = (
+                fixture.get("fixture_id")
+                or (fixture.get("home_team"), fixture.get("away_team"), fixture.get("competition"))
+            )
+            current = best_1x2.get(key)
+            if current is None or item.get("probability", 0) > current.get("probability", 0):
+                best_1x2[key] = item
+        elif (
+            (category == "Both Teams To Score" and selection == "Yes")
+            or (category == "Total Goals" and selection == "Over 2.5")
+            or (category == "Total Corners" and selection == "Over 9.5")
+        ):
+            eligible.append(item)
+
+    eligible.extend(best_1x2.values())
+    status_order = {"SUPPORTED": 0, "UNDERCONFIDENT": 1, "CAUTION": 2}
+    validated = []
+    for source in eligible:
+        item = dict(source)
+        reliability = str(item.get("reliability") or "")
+        label = reliability.split(" (n=", 1)[0].strip().upper()
+        try:
+            sample_count = int(reliability.split("(n=", 1)[1].split(")", 1)[0])
+        except (IndexError, ValueError):
+            sample_count = 0
+        if label not in status_order or sample_count < 30:
+            continue
+        if float(item.get("probability", 0.0)) < minimum_probability:
+            continue
+        item["sample_count"] = sample_count
+        item["ranking_basis"] = "Calibrated probability with historical reliability support"
+        coverage_note = f"Calibration: {label}; historical sample n={sample_count}."
+        item["note"] = " ".join(part for part in (coverage_note, item.get("note", "")) if part).strip()
+        validated.append(item)
+
+    validated.sort(key=lambda item: (
+        -float(item.get("probability", 0.0)),
+        status_order.get(str(item.get("reliability", "")).split(" (n=", 1)[0].upper(), 9),
+        -int(item.get("sample_count", 0)),
+    ))
+    return validated[:limit]
+
+
+def rank_market_categories(candidates):
+    """Group market rankings and add a reliability-screened cross-market shortlist."""
+    grouped = {}
+    source = [dict(item) for item in (candidates or [])]
+    for item in source:
+        grouped.setdefault(item["category"], []).append(item)
     for entries in grouped.values():
         entries.sort(key=lambda item: item["probability"], reverse=True)
         for rank, item in enumerate(entries, 1):
             item["rank"] = rank
+    top_picks = _validated_top_picks(source)
+    for rank, item in enumerate(top_picks, 1):
+        item["rank"] = rank
+    grouped["TOP PICKS — VALIDATED"] = top_picks
     return grouped
