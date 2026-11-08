@@ -191,7 +191,28 @@ def _validated_top_picks(candidates, minimum_probability=0.60, limit=20):
         status_order.get(str(item.get("reliability", "")).split(" (n=", 1)[0].upper(), 9),
         -int(item.get("sample_count", 0)),
     ))
-    return validated[:limit]
+
+    # Keep the shortlist focused on distinct fixtures: show each match once,
+    # using that fixture's strongest eligible market selection.
+    unique_fixtures = []
+    seen_fixtures = set()
+    for index, item in enumerate(validated):
+        fixture = item.get("fixture") or {}
+        fixture_id = fixture.get("fixture_id")
+        if fixture_id is not None:
+            fixture_key = ("id", fixture_id)
+        elif fixture.get("home_team") and fixture.get("away_team"):
+            fixture_key = (
+                "teams", fixture.get("home_team"), fixture.get("away_team"),
+                fixture.get("competition"),
+            )
+        else:
+            fixture_key = ("candidate", index)
+        if fixture_key in seen_fixtures:
+            continue
+        seen_fixtures.add(fixture_key)
+        unique_fixtures.append(item)
+    return unique_fixtures[:limit]
 
 
 def rank_market_categories(candidates):
