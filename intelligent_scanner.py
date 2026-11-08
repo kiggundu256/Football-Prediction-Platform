@@ -8,6 +8,7 @@ import json
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone
 
 from PySide6.QtCore import QThread, Signal
 
@@ -271,6 +272,49 @@ class IntelligentScannerWorker(QThread):
             "corner_averages": corners, "markets": markets,
         }
 
+    def _provider_cache_get(self, cache_key, ttl_seconds):
+        try:
+            with sqlite3.connect(self.database_path) as db:
+                row = db.execute(
+                    "SELECT data_json, cached_at_utc FROM provider_data_cache WHERE cache_key = ?",
+                    (cache_key,),
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+        if not row:
+            return None
+        try:
+            cached_at = datetime.fromisoformat(row[1])
+            if cached_at.tzinfo is None:
+                cached_at = cached_at.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - cached_at).total_seconds()
+            if age > ttl_seconds:
+                return None
+            return json.loads(row[0])
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    def _provider_cache_save(self, cache_key, data):
+        try:
+            with sqlite3.connect(self.database_path) as db:
+                db.execute(
+                    """INSERT INTO provider_data_cache(cache_key,data_json,cached_at_utc)
+                       VALUES(?,?,?) ON CONFLICT(cache_key) DO UPDATE SET
+                       data_json=excluded.data_json,cached_at_utc=excluded.cached_at_utc""",
+                    (cache_key, json.dumps(data), datetime.now(timezone.utc).isoformat()),
+                )
+        except sqlite3.Error:
+            # Optional cache failures must never discard a valid analysis.
+            return
+
+    def _cached_or_fetch(self, cache_key, ttl_seconds, fetcher):
+        cached = self._provider_cache_get(cache_key, ttl_seconds)
+        if cached is not None:
+            return cached
+        data = fetcher()
+        self._provider_cache_save(cache_key, data)
+        return data
+
     def _deep_enrich(self, database, result):
         fixture_info = result["fixture"]
         fixture_id = fixture_info.get("fixture_id")
@@ -289,7 +333,10 @@ class IntelligentScannerWorker(QThread):
         injuries = lineups = weather = venue_data = None
         errors = []
         try:
-            injuries = fetch_fixture_injuries(fixture_id, api_key=self.api_key)
+            injuries = self._cached_or_fetch(
+                f"injuries:{fixture_id}", 30 * 60,
+                lambda: fetch_fixture_injuries(fixture_id, api_key=self.api_key),
+            )
         except ApiFootballError as exc:
             errors.append("Injuries: " + str(exc))
             if "limit" in str(exc).casefold() or "429" in str(exc):
@@ -302,7 +349,10 @@ class IntelligentScannerWorker(QThread):
             return result
         if not self._provider_quota_exhausted:
             try:
-                lineups = fetch_fixture_lineups(fixture_id, api_key=self.api_key)
+                lineups = self._cached_or_fetch(
+                    f"lineups:{fixture_id}", 10 * 60,
+                    lambda: fetch_fixture_lineups(fixture_id, api_key=self.api_key),
+                )
             except ApiFootballError as exc:
                 errors.append("Lineups: " + str(exc))
                 if "limit" in str(exc).casefold() or "429" in str(exc):
@@ -312,11 +362,21 @@ class IntelligentScannerWorker(QThread):
             return result
         if venue.get("id") and not self._provider_quota_exhausted:
             try:
-                venue_data = fetch_venue_details(venue["id"], api_key=self.api_key)
+                venue_data = self._cached_or_fetch(
+                    f"venue:{venue['id']}", 30 * 24 * 60 * 60,
+                    lambda: fetch_venue_details(venue["id"], api_key=self.api_key),
+                )
                 if isinstance(venue_data, dict):
-                    weather = fetch_match_weather(
-                        venue_data.get("latitude"), venue_data.get("longitude"),
-                        fixture_data.get("date"),
+                    weather_key = (
+                        f"weather:{venue_data.get('latitude')}:{venue_data.get('longitude')}:"
+                        f"{(fixture_data.get('date') or '')[:10]}"
+                    )
+                    weather = self._cached_or_fetch(
+                        weather_key, 60 * 60,
+                        lambda: fetch_match_weather(
+                            venue_data.get("latitude"), venue_data.get("longitude"),
+                            fixture_data.get("date"),
+                        ),
                     )
             except (ApiFootballError, TypeError, ValueError) as exc:
                 errors.append("Venue/weather: " + str(exc))
