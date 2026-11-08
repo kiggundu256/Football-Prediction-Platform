@@ -1768,6 +1768,11 @@ class MainWindow(QMainWindow):
         self.scan_all_button.setToolTip("Analyse every visible fixture using local historical data and rank its markets below.")
         self.scan_all_button.clicked.connect(self.scan_all_fixtures)
         scanner_title_row.addWidget(self.scan_all_button)
+        self.stop_scan_button = QPushButton("Stop Scan")
+        self.stop_scan_button.setEnabled(False)
+        self.stop_scan_button.setToolTip("Stop after the current fixture finishes; completed fixture results will be kept.")
+        self.stop_scan_button.clicked.connect(self.stop_scanner)
+        scanner_title_row.addWidget(self.stop_scan_button)
         scanner_layout.addLayout(scanner_title_row)
         self.scanner_summary = QLabel("Load real fixtures, then select Scan All Fixtures. Results will be grouped by market and ranked by estimated probability.")
         self.scanner_summary.setWordWrap(True)
@@ -1800,6 +1805,7 @@ class MainWindow(QMainWindow):
         self.live_content_splitter.setStretchFactor(3, 3)
         self.live_content_splitter.setSizes([330, 95, 115, 280])
         self.scanner_results = {}
+        self._scanner_cancel_requested = False
         box.addWidget(self.live_content_splitter, 1)
         self.set_match_intelligence_sections({
             "Injuries & suspensions": ["Not loaded"],
@@ -1810,8 +1816,21 @@ class MainWindow(QMainWindow):
         })
         return page
 
+    def stop_scanner(self):
+        """Request cooperative cancellation without closing the application."""
+        if not getattr(self, "_scanner_running", False):
+            return
+        self._scanner_cancel_requested = True
+        self.stop_scan_button.setEnabled(False)
+        self.stop_scan_button.setText("Stopping…")
+        self.scanner_summary.setText(
+            "STOP REQUESTED — finishing the current fixture safely, then keeping completed results…"
+        )
+
     def scan_all_fixtures(self):
-        """Analyse visible fixtures from local history and render one ranked market workspace."""
+        """Analyse visible fixtures with responsive, cooperative stop handling."""
+        if getattr(self, "_scanner_running", False):
+            return
         if self.fixture_data_mode == "demo":
             self.scanner_summary.setText("Demo fixtures are illustrative and are not scanned. Load real provider fixtures first.")
             return
@@ -1819,64 +1838,86 @@ class MainWindow(QMainWindow):
         if not fixtures:
             self.scanner_summary.setText("No visible fixtures to scan. Load fixtures or clear the current filters.")
             return
+
+        self._scanner_running = True
+        self._scanner_cancel_requested = False
         self.scan_all_button.setEnabled(False)
-        self.scanner_summary.setText(f"Scanning {len(fixtures)} visible fixtures using the local historical database. No API requests are made by this scan…")
-        QApplication.processEvents()
+        self.stop_scan_button.setEnabled(True)
+        self.stop_scan_button.setText("Stop Scan")
         all_candidates = []
         skipped = []
-        for index, fixture in enumerate(fixtures):
-            teams = fixture.get("teams") or {}
-            home = (teams.get("home") or {}).get("name", "Home")
-            away = (teams.get("away") or {}).get("name", "Away")
+        completed = 0
+
+        def publish_results(status):
+            self.scanner_results = rank_market_categories(all_candidates)
+            self.scanner_category.blockSignals(True)
+            self.scanner_category.clear()
+            for category in sorted(self.scanner_results):
+                self.scanner_category.addItem(category)
+            self.scanner_category.blockSignals(False)
+            self.render_scanner_category(self.scanner_category.currentText())
+            self.live_content_splitter.setSizes([260, 75, 90, 390])
+            scanned = completed
             self.scanner_summary.setText(
-                f"SCANNING {index + 1}/{len(fixtures)}  •  {home} vs {away}  •  "
-                f"{len(all_candidates):,} market selections collected  •  {len(skipped)} skipped"
+                f"{status}  •  {scanned}/{len(fixtures)} fixtures analysed  •  "
+                f"{len(all_candidates):,} market selections retained  •  {len(skipped)} skipped."
             )
-            QApplication.processEvents()
-            self.live_table.setCurrentCell(index, 0)
-            try:
-                result = self.analyze_selected_fixture(automatic_scan=True)
-            except Exception as exc:
-                result = {"error": f"Analysis error: {exc}"}
-            if not isinstance(result, dict) or not result.get("candidates"):
-                reason = result.get("error", "Insufficient local data") if isinstance(result, dict) else "Insufficient local data"
-                skipped.append(f"{home} vs {away}: {reason}")
-                continue
-            for candidate in result["candidates"]:
-                entry = dict(candidate)
-                entry["fixture"] = result["fixture"]
-                entry["note"] = "Local history: {} / {} recent matches. {}".format(
-                    result["home_history"], result["away_history"], entry.get("note", "")
-                ).strip()
-                all_candidates.append(entry)
-        self.scanner_summary.setText(
-            f"FINALISING RESULTS  •  {len(fixtures)}/{len(fixtures)} fixtures checked  •  "
-            f"{len(all_candidates):,} market selections collected"
-        )
-        QApplication.processEvents()
-        self.scan_all_button.setEnabled(True)
-        self.scanner_results = rank_market_categories(all_candidates)
-        self.scanner_category.blockSignals(True)
-        self.scanner_category.clear()
-        for category in sorted(self.scanner_results):
-            self.scanner_category.addItem(category)
-        self.scanner_category.blockSignals(False)
-        scanned = len(fixtures) - len(skipped)
-        self.scanner_summary.setText(
-            f"SCAN COMPLETE  •  {scanned}/{len(fixtures)} fixtures analysed  •  "
-            f"{len(all_candidates):,} market selections ranked  •  {len(skipped)} skipped. "
-            "Probabilities are estimates, not guarantees. Goal-line markets derived from expected goals are NOT CALIBRATED; corner markets appear only where local corner history supports them."
-        )
-        if skipped:
-            self.scanner_summary.setToolTip("\n".join(skipped))
-        else:
-            self.scanner_summary.setToolTip("All visible fixtures had sufficient local historical results.")
-        self.render_scanner_category(self.scanner_category.currentText())
-        self.live_content_splitter.setSizes([260, 75, 90, 390])
-        self.api_message.setText(
-            f"Automatic scan complete: {scanned} analysed, {len(skipped)} skipped. "
-            "This scan used local history only and made no API requests."
-        )
+            self.scanner_summary.setToolTip("\n".join(skipped) if skipped else
+                "Completed fixture results are retained in this session.")
+            self.api_message.setText(
+                f"Automatic scan {status.lower()}: {scanned} analysed, {len(skipped)} skipped. "
+                "This scan used local history only and made no API requests."
+            )
+
+        try:
+            self.scanner_summary.setText(
+                f"Scanning {len(fixtures)} visible fixtures using local historical data. "
+                "You can stop the scan at any time."
+            )
+            for index, fixture in enumerate(fixtures):
+                QApplication.processEvents()
+                if self._scanner_cancel_requested:
+                    break
+                teams = fixture.get("teams") or {}
+                home = (teams.get("home") or {}).get("name", "Home")
+                away = (teams.get("away") or {}).get("name", "Away")
+                self.scanner_summary.setText(
+                    f"SCANNING {index + 1}/{len(fixtures)}  •  {home} vs {away}  •  "
+                    f"{len(all_candidates):,} selections collected  •  {len(skipped)} skipped"
+                )
+                self.live_table.setCurrentCell(index, 0)
+                try:
+                    result = self.analyze_selected_fixture(automatic_scan=True)
+                except Exception as exc:
+                    result = {"error": f"Analysis error: {exc}"}
+                QApplication.processEvents()
+                if isinstance(result, dict) and result.get("cancelled"):
+                    break
+                if not isinstance(result, dict) or not result.get("candidates"):
+                    reason = result.get("error", "Insufficient local data") if isinstance(result, dict) else "Insufficient local data"
+                    skipped.append(f"{home} vs {away}: {reason}")
+                else:
+                    for candidate in result["candidates"]:
+                        entry = dict(candidate)
+                        entry["fixture"] = result["fixture"]
+                        entry["note"] = "Local history: {} / {} recent matches. {}".format(
+                            result["home_history"], result["away_history"], entry.get("note", "")
+                        ).strip()
+                        all_candidates.append(entry)
+                    completed += 1
+                if self._scanner_cancel_requested:
+                    break
+
+            if self._scanner_cancel_requested:
+                publish_results("SCAN STOPPED — PARTIAL RESULTS")
+            else:
+                publish_results("SCAN COMPLETE")
+        finally:
+            self._scanner_running = False
+            self._scanner_cancel_requested = False
+            self.scan_all_button.setEnabled(True)
+            self.stop_scan_button.setEnabled(False)
+            self.stop_scan_button.setText("Stop Scan")
 
     def render_scanner_category(self, category):
         if not hasattr(self, "scanner_table"):
@@ -2485,6 +2526,15 @@ class MainWindow(QMainWindow):
         home_name, away_name = home.get("name", "Home"), away.get("name", "Away")
         key = self.get_api_key()
         fixture_date = ((item.get("fixture") or {}).get("date") or "")[:10]
+
+        def scan_cancelled():
+            if not automatic_scan:
+                return False
+            QApplication.processEvents()
+            return bool(getattr(self, "_scanner_cancel_requested", False))
+
+        if scan_cancelled():
+            return {"cancelled": True}
         self.api_message.setText(
             f"Checking local historical database for {home_name} and {away_name} first…"
         )
@@ -2492,6 +2542,8 @@ class MainWindow(QMainWindow):
         try:
             home_recent = self.historical_db.team_recent_matches(home_id, fixture_date, limit=5)
             away_recent = self.historical_db.team_recent_matches(away_id, fixture_date, limit=5)
+            if scan_cancelled():
+                return {"cancelled": True}
             # Merge name-matched CSV history even when API-ID history exists, so
             # imported statistics (especially corners) remain available to models.
             for team_name, team_id, history in (
@@ -2512,6 +2564,8 @@ class MainWindow(QMainWindow):
                     home_recent = merged
                 else:
                     away_recent = merged
+            if scan_cancelled():
+                return {"cancelled": True}
             if not home_recent or not away_recent:
                 if automatic_scan:
                     raise ApiFootballError("Insufficient local history for one or both teams; import more completed matches in Data Library.")
@@ -2585,6 +2639,8 @@ class MainWindow(QMainWindow):
 
         home_used = matches_used(home_recent, home_id)
         away_used = matches_used(away_recent, away_id)
+        if scan_cancelled():
+            return {"cancelled": True}
         selected_fixture_data = item.get("fixture") or {}
         selected_fixture_id = selected_fixture_data.get("id")
         corner_averages = self.store.get_provider_cache(
@@ -2621,6 +2677,8 @@ class MainWindow(QMainWindow):
 
         hr = team_profile(home_used, home_id)
         ar = team_profile(away_used, away_id)
+        if scan_cancelled():
+            return {"cancelled": True}
         if not hr or not ar:
             message = "Not enough completed local results with scores for both teams."
             self.api_message.setText(message)
