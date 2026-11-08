@@ -102,6 +102,43 @@ class IntelligentScannerWorker(QThread):
             and (row[1] or None) == profile.get("source_latest_match_date")
         )
 
+    def _prefetch_histories(self, database):
+        """Load every distinct fixture-team history using a small number of SQL batches."""
+        requests = []
+        key_map = {}
+        for fixture in self.fixtures:
+            fixture_data = fixture.get("fixture") or {}
+            before_date = (fixture_data.get("date") or "")[:10]
+            if not before_date:
+                continue
+            home, away = self._team_parts(fixture)
+            for team in (home, away):
+                team_id = team.get("id")
+                team_name = team.get("name") or "Unknown"
+                cache_key = (
+                    ("id", int(team_id), before_date) if team_id is not None
+                    else ("name", database._team_name_key(team_name), before_date)
+                )
+                if cache_key in key_map:
+                    continue
+                request_key = str(len(requests))
+                key_map[cache_key] = request_key
+                requests.append({
+                    "key": request_key, "team_id": team_id,
+                    "team_name": team_name, "before_date": before_date,
+                })
+        batched = database.team_recent_matches_batch(requests, limit=10)
+        request_by_key = {item["key"]: item for item in requests}
+        for cache_key, request_key in key_map.items():
+            matches = batched.get(request_key, [])
+            if not matches:
+                request = request_by_key[request_key]
+                matches = database.team_recent_matches_by_name(
+                    request["team_name"], request["before_date"],
+                    limit=10, provider_team_id=request["team_id"],
+                )
+            self._history_cache[cache_key] = matches
+
     def _load_team_history(self, database, team, before_date, cache):
         team_id = team.get("id")
         team_name = team.get("name") or "Unknown"
@@ -328,6 +365,7 @@ class IntelligentScannerWorker(QThread):
         try:
             database = HistoricalDatabase(self.database_path)
             self._history_cache = {}
+            self._prefetch_histories(database)
             self._calibration_current = self._calibration_is_current(database)
             model = train_outcome_model(self.training_records)
             stage_one = []
