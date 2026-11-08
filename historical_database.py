@@ -230,6 +230,74 @@ class HistoricalDatabase:
                     break
         return matches
 
+    def team_recent_matches_batch(self, requests, limit=10):
+        """Fetch recent histories for many teams in batched, date-safe SQL queries.
+
+        Each request is a mapping with key, team_id, team_name and before_date.
+        Results are keyed by the supplied key and contain only completed matches
+        strictly earlier than that fixture's kickoff date.
+        """
+        output = {}
+        requests = [item for item in (requests or []) if item.get("before_date")]
+        # Four bound values per request; keep well below SQLite's parameter limit.
+        for offset in range(0, len(requests), 150):
+            batch = requests[offset:offset + 150]
+            values = ",".join(["(?,?,?,?)"] * len(batch))
+            params = []
+            for item in batch:
+                params.extend((
+                    str(item["key"]),
+                    int(item["team_id"]) if item.get("team_id") is not None else None,
+                    str(item.get("team_name") or ""),
+                    str(item["before_date"]),
+                ))
+            params.append(int(limit))
+            query = f"""
+                WITH requested(cache_key, team_id, team_name, before_date) AS (
+                    VALUES {values}
+                ),
+                ranked AS (
+                    SELECT r.cache_key, h.payload_json, h.match_date, h.fixture_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY r.cache_key
+                               ORDER BY h.match_date DESC, h.fixture_id DESC
+                           ) AS row_number
+                    FROM requested r
+                    JOIN historical_matches h
+                      ON (
+                           (r.team_id IS NOT NULL AND
+                            (h.home_team_id = r.team_id OR h.away_team_id = r.team_id))
+                           OR
+                           (r.team_name <> '' AND
+                            (h.home_team = r.team_name OR h.away_team = r.team_name))
+                      )
+                    WHERE h.match_date < r.before_date
+                      AND h.status IN ('FT','AET','PEN')
+                      AND h.home_goals IS NOT NULL AND h.away_goals IS NOT NULL
+                )
+                SELECT cache_key, payload_json
+                FROM ranked WHERE row_number <= ?
+                ORDER BY cache_key, match_date DESC, fixture_id DESC
+            """
+            with self.connect() as db:
+                rows = db.execute(query, params).fetchall()
+            request_by_key = {str(item["key"]): item for item in batch}
+            for row in rows:
+                item = request_by_key[row["cache_key"]]
+                match = json.loads(row["payload_json"])
+                team_id = item.get("team_id")
+                if team_id is not None:
+                    teams = match.get("teams") or {}
+                    home = teams.get("home") or {}
+                    away = teams.get("away") or {}
+                    team_name = str(item.get("team_name") or "")
+                    if home.get("name") == team_name:
+                        home["id"] = int(team_id)
+                    elif away.get("name") == team_name:
+                        away["id"] = int(team_id)
+                output.setdefault(row["cache_key"], []).append(match)
+        return output
+
     def team_recent_matches(self, team_id, before_date, limit=5):
         if not team_id:
             return []
