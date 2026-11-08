@@ -2591,28 +2591,35 @@ class MainWindow(QMainWindow):
                         7 * 24 * 60 * 60,
                     )
                     self.historical_db.upsert_fixtures(away_recent)
-            h2h_matches = self.historical_db.head_to_head_matches(
-                home_id, away_id, fixture_date, limit=10
-            )
-            if not h2h_matches:
-                h2h_matches = self.historical_db.head_to_head_matches_by_name(
-                    home_name, away_name, fixture_date, limit=10
-                )
-            if not h2h_matches and key and not automatic_scan:
-                try:
-                    h2h_matches = self.cached_provider_data(
-                        f"h2h:{home_id}:{away_id}:{fixture_date}:10",
-                        lambda: fetch_head_to_head_fixtures(
-                            home_id, away_id, api_key=key, before_date=fixture_date, limit=10
-                        ),
-                        7 * 24 * 60 * 60,
-                    )
-                    self.historical_db.upsert_fixtures(h2h_matches)
-                    h2h_error = None
-                except ApiFootballError as h2h_exc:
-                    h2h_error = str(h2h_exc)
-            else:
+            # Head-to-head history is not used by the automatic market scanner.
+            # Skip these extra lookups during scans; they can otherwise trigger a
+            # full normalized-name fallback across the historical database.
+            if automatic_scan:
+                h2h_matches = []
                 h2h_error = None
+            else:
+                h2h_matches = self.historical_db.head_to_head_matches(
+                    home_id, away_id, fixture_date, limit=10
+                )
+                if not h2h_matches:
+                    h2h_matches = self.historical_db.head_to_head_matches_by_name(
+                        home_name, away_name, fixture_date, limit=10
+                    )
+                if not h2h_matches and key:
+                    try:
+                        h2h_matches = self.cached_provider_data(
+                            f"h2h:{home_id}:{away_id}:{fixture_date}:10",
+                            lambda: fetch_head_to_head_fixtures(
+                                home_id, away_id, api_key=key, before_date=fixture_date, limit=10
+                            ),
+                            7 * 24 * 60 * 60,
+                        )
+                        self.historical_db.upsert_fixtures(h2h_matches)
+                        h2h_error = None
+                    except ApiFootballError as h2h_exc:
+                        h2h_error = str(h2h_exc)
+                else:
+                    h2h_error = None
         except ApiFootballError as exc:
             self.api_message.setText(str(exc))
             if automatic_scan:
