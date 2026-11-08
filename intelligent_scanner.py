@@ -359,7 +359,10 @@ class IntelligentScannerWorker(QThread):
                     "elapsed": time.perf_counter() - started,
                 })
                 return
-            shortlist = select_shortlist(stage_one, self.shortlist_size)
+            shortlist = (
+                list(stage_one) if self.mode == "deep_all"
+                else select_shortlist(stage_one, self.shortlist_size)
+            )
             enriched = []
             for index, result in enumerate(shortlist, 1):
                 if self._stopped():
