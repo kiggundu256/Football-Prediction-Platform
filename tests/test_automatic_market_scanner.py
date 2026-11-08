@@ -43,6 +43,44 @@ class AutomaticMarketScannerTests(unittest.TestCase):
         self.assertIn("Home Corners", categories)
         self.assertIn("Away Corners", categories)
 
+    def test_validated_top_picks_rank_supported_cross_market_selections(self):
+        fixture = {
+            "fixture_id": 101, "home_team": "Home", "away_team": "Away",
+            "competition": "Test League",
+        }
+        candidates = [
+            {"category": "Match Result (1X2)", "selection": "Home win",
+             "probability": 0.68, "reliability": "SUPPORTED (n=140)", "fixture": fixture},
+            {"category": "Match Result (1X2)", "selection": "Draw",
+             "probability": 0.20, "reliability": "SUPPORTED (n=140)", "fixture": fixture},
+            {"category": "Match Result (1X2)", "selection": "Away win",
+             "probability": 0.12, "reliability": "SUPPORTED (n=140)", "fixture": fixture},
+            {"category": "Both Teams To Score", "selection": "Yes",
+             "probability": 0.64, "reliability": "CAUTION (n=65)", "fixture": fixture},
+            {"category": "Total Goals", "selection": "Over 2.5",
+             "probability": 0.82, "reliability": "OVERCONFIDENT (n=220)", "fixture": fixture},
+            {"category": "Total Corners", "selection": "Over 9.5",
+             "probability": 0.75, "reliability": "LOW SAMPLE (n=12)", "fixture": fixture},
+            {"category": "Correct Score", "selection": "1-0",
+             "probability": 0.90, "reliability": "NOT CALIBRATED", "fixture": fixture},
+        ]
+        grouped = rank_market_categories(candidates)
+        picks = grouped["TOP PICKS — VALIDATED"]
+        self.assertEqual(
+            [item["selection"] for item in picks],
+            ["Home win", "Yes"],
+        )
+        self.assertEqual([item["rank"] for item in picks], [1, 2])
+        self.assertEqual(picks[0]["sample_count"], 140)
+        self.assertIn("historical sample n=65", picks[1]["note"])
+
+    def test_validated_top_picks_require_probability_floor(self):
+        candidate = {
+            "category": "Both Teams To Score", "selection": "Yes",
+            "probability": 0.59, "reliability": "SUPPORTED (n=100)",
+        }
+        self.assertEqual(rank_market_categories([candidate])["TOP PICKS — VALIDATED"], [])
+
     def test_probabilities_are_bounded_and_ranked_descending(self):
         candidates = build_market_candidates("Home", "Away", {
             "home_win": 0.5, "draw": 0.25, "away_win": 0.25, "btts_yes": 0.55,
