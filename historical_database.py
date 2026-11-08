@@ -59,6 +59,10 @@ class HistoricalDatabase:
                     ON historical_matches(away_team_id, match_date DESC);
                 CREATE INDEX IF NOT EXISTS idx_historical_pair_date
                     ON historical_matches(home_team_id, away_team_id, match_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_historical_home_name_date
+                    ON historical_matches(home_team, match_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_historical_away_name_date
+                    ON historical_matches(away_team, match_date DESC);
                 CREATE TABLE IF NOT EXISTS historical_syncs (
                     league_id INTEGER NOT NULL, season INTEGER NOT NULL,
                     competition TEXT NOT NULL, country TEXT, match_count INTEGER NOT NULL,
@@ -148,17 +152,28 @@ class HistoricalDatabase:
         return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
 
     def team_recent_matches_by_name(self, team_name, before_date, limit=5, provider_team_id=None):
-        """Find imported CSV history by normalized team name, independent of provider IDs."""
+        """Use indexed exact-name lookup first; retain normalized fallback for aliases."""
         key = self._team_name_key(team_name)
         if not key:
             return []
         with self.connect() as db:
             rows = db.execute("""
                 SELECT payload_json FROM historical_matches
-                WHERE match_date < ? AND status IN ('FT','AET','PEN')
+                WHERE (home_team = ? OR away_team = ?)
+                  AND match_date < ? AND status IN ('FT','AET','PEN')
                   AND home_goals IS NOT NULL AND away_goals IS NOT NULL
-                ORDER BY match_date DESC, fixture_id DESC
-            """, (before_date,)).fetchall()
+                ORDER BY match_date DESC, fixture_id DESC LIMIT ?
+            """, (str(team_name), str(team_name), before_date, int(limit))).fetchall()
+            if not rows:
+                # Compatibility fallback for CSV/provider aliases with punctuation,
+                # accents or alternate spellings. This path is not used when exact
+                # imported team names are available.
+                rows = db.execute("""
+                    SELECT payload_json FROM historical_matches
+                    WHERE match_date < ? AND status IN ('FT','AET','PEN')
+                      AND home_goals IS NOT NULL AND away_goals IS NOT NULL
+                    ORDER BY match_date DESC, fixture_id DESC
+                """, (before_date,)).fetchall()
         matches = []
         for row in rows:
             match = json.loads(row["payload_json"])
@@ -177,7 +192,7 @@ class HistoricalDatabase:
         return matches
 
     def head_to_head_matches_by_name(self, home_team, away_team, before_date, limit=10):
-        """Find imported CSV head-to-head history by normalized club names."""
+        """Use indexed exact-name pair lookup first; preserve normalized alias fallback."""
         home_key = self._team_name_key(home_team)
         away_key = self._team_name_key(away_team)
         if not home_key or not away_key:
@@ -185,10 +200,20 @@ class HistoricalDatabase:
         with self.connect() as db:
             rows = db.execute("""
                 SELECT payload_json FROM historical_matches
-                WHERE match_date < ? AND status IN ('FT','AET','PEN')
+                WHERE ((home_team = ? AND away_team = ?) OR
+                       (home_team = ? AND away_team = ?))
+                  AND match_date < ? AND status IN ('FT','AET','PEN')
                   AND home_goals IS NOT NULL AND away_goals IS NOT NULL
-                ORDER BY match_date DESC, fixture_id DESC
-            """, (before_date,)).fetchall()
+                ORDER BY match_date DESC, fixture_id DESC LIMIT ?
+            """, (str(home_team), str(away_team), str(away_team), str(home_team),
+                  before_date, int(limit))).fetchall()
+            if not rows:
+                rows = db.execute("""
+                    SELECT payload_json FROM historical_matches
+                    WHERE match_date < ? AND status IN ('FT','AET','PEN')
+                      AND home_goals IS NOT NULL AND away_goals IS NOT NULL
+                    ORDER BY match_date DESC, fixture_id DESC
+                """, (before_date,)).fetchall()
         matches = []
         for row in rows:
             match = json.loads(row["payload_json"])
