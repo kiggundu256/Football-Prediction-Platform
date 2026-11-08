@@ -43,6 +43,7 @@ from historical_reconciliation import HistoricalReconciliation
 from data_quality import inspect_data_quality
 from player_intelligence import PlayerIntelligenceDatabase
 from automatic_market_scanner import build_market_candidates, rank_market_categories
+from intelligent_scanner import IntelligentScannerWorker
 
 APP_NAME = ""
 KEYRING_SERVICE = "FootballPredictionPlatform"
@@ -1780,6 +1781,19 @@ class MainWindow(QMainWindow):
         self.scanner_summary.setStyleSheet("color:#AFC3DF;padding:4px;background:#111D30;border:1px solid #26364D;border-radius:6px")
         scanner_layout.addWidget(self.scanner_summary)
         scanner_filters = QHBoxLayout()
+        scanner_filters.addWidget(QLabel("Scan mode:"))
+        self.scanner_mode = QComboBox()
+        self.scanner_mode.addItem("Intelligent Scan — local scan + deep top 20", "intelligent")
+        self.scanner_mode.addItem("Fast Scan Only — local history", "fast")
+        self.scanner_mode.addItem("Deep Scan All — every fixture", "deep_all")
+        self.scanner_mode.setToolTip("Intelligent mode scans all fixtures locally, then enriches only the best shortlist.")
+        scanner_filters.addWidget(self.scanner_mode, 2)
+        scanner_filters.addWidget(QLabel("Deep shortlist:"))
+        self.scanner_shortlist = QComboBox()
+        for shortlist_count in (5, 10, 15, 20):
+            self.scanner_shortlist.addItem(f"{shortlist_count} fixtures", shortlist_count)
+        self.scanner_shortlist.setCurrentIndex(3)
+        scanner_filters.addWidget(self.scanner_shortlist)
         scanner_filters.addWidget(QLabel("Market category:"))
         self.scanner_category = QComboBox()
         self.scanner_category.addItem("Scan results will appear here")
@@ -1807,6 +1821,8 @@ class MainWindow(QMainWindow):
         self.live_content_splitter.setSizes([330, 95, 115, 280])
         self.scanner_results = {}
         self._scanner_cancel_requested = False
+        self._scanner_worker = None
+        self._scanner_running = False
         box.addWidget(self.live_content_splitter, 1)
         self.set_match_intelligence_sections({
             "Injuries & suspensions": ["Not loaded"],
@@ -1818,135 +1834,168 @@ class MainWindow(QMainWindow):
         return page
 
     def stop_scanner(self):
-        """Request cooperative cancellation without closing the application."""
-        if not getattr(self, "_scanner_running", False):
+        """Request cooperative cancellation from the background scanner."""
+        worker = getattr(self, "_scanner_worker", None)
+        if not getattr(self, "_scanner_running", False) or worker is None:
             return
         self._scanner_cancel_requested = True
+        worker.request_stop()
         self.stop_scan_button.setEnabled(False)
         self.stop_scan_button.setText("Stopping…")
         self.scanner_summary.setText(
-            "STOP REQUESTED — finishing the current fixture safely, then keeping completed results…"
+            "STOP REQUESTED — the worker will finish its current safe checkpoint and keep completed results…"
         )
 
     def scan_all_fixtures(self):
-        """Analyse visible fixtures with responsive, cooperative stop handling."""
+        """Run local-first scanning and optional shortlist enrichment off the GUI thread."""
         if getattr(self, "_scanner_running", False):
             return
         if self.fixture_data_mode == "demo":
-            self.scanner_summary.setText("Demo fixtures are illustrative and are not scanned. Load real provider fixtures first.")
+            self.scanner_summary.setText(
+                "Demo fixtures are illustrative and are not scanned. Load real provider fixtures first."
+            )
             return
         fixtures = list(self.visible_fixtures)
         if not fixtures:
             self.scanner_summary.setText("No visible fixtures to scan. Load fixtures or clear the current filters.")
             return
 
+        mode = self.scanner_mode.currentData() if hasattr(self, "scanner_mode") else "intelligent"
+        shortlist_size = self.scanner_shortlist.currentData() if hasattr(self, "scanner_shortlist") else 20
+        try:
+            training_records = self.store.training_records()
+            calibration_profile = self.store.get_provider_cache("live_calibration_profile")
+            api_key = self.get_api_key()
+        except Exception as exc:
+            self.scanner_summary.setText(f"Could not prepare scanner inputs: {exc}")
+            return
+
         self._scanner_running = True
         self._scanner_cancel_requested = False
         self.scan_all_button.setEnabled(False)
+        self.scanner_mode.setEnabled(False)
+        self.scanner_shortlist.setEnabled(False)
         self.stop_scan_button.setEnabled(True)
         self.stop_scan_button.setText("Stop Scan")
-        all_candidates = []
-        skipped = []
-        completed = 0
-        # Reuse immutable scan inputs across fixtures; caches live only for this scan.
-        self._scanner_context = {
-            "history": {}, "training_loaded": False, "training_model": None,
-            "started": time.perf_counter(), "analysis_seconds": 0.0,
-            "history_seconds": 0.0, "training_seconds": 0.0,
-        }
+        self.scanner_results = {}
+        self.scanner_summary.setText(
+            f"Starting {len(fixtures)} fixtures in the background. "
+            "Stage 1 uses local history; Stage 2 enriches the selected shortlist."
+        )
+        self._scanner_worker = IntelligentScannerWorker(
+            fixtures=fixtures,
+            database_path=self.historical_db.path,
+            training_records=training_records,
+            calibration_profile=calibration_profile,
+            api_key=api_key,
+            mode=mode,
+            shortlist_size=int(shortlist_size or 20),
+        )
+        self._scanner_worker.progress.connect(self._on_scanner_progress)
+        self._scanner_worker.completed.connect(self._on_scanner_completed)
+        self._scanner_worker.failed.connect(self._on_scanner_failed)
+        self._scanner_worker.finished.connect(self._on_scanner_thread_finished)
+        self._scanner_worker.start()
 
-        def publish_results(status):
-            self.scanner_results = rank_market_categories(all_candidates)
-            self.scanner_category.blockSignals(True)
-            self.scanner_category.clear()
-            categories = sorted(self.scanner_results)
-            if "TOP PICKS — VALIDATED" in categories:
-                categories.remove("TOP PICKS — VALIDATED")
-                categories.insert(0, "TOP PICKS — VALIDATED")
-            for category in categories:
-                self.scanner_category.addItem(category)
-            self.scanner_category.blockSignals(False)
-            self.render_scanner_category(self.scanner_category.currentText())
-            self.live_content_splitter.setSizes([260, 75, 90, 390])
-            scanned = completed
-            top_pick_count = len(self.scanner_results.get("TOP PICKS — VALIDATED", []))
-            top_pick_note = (
-                f" {top_pick_count} validated picks passed the 60% probability and historical-reliability screen."
-                if top_pick_count else
-                " No picks passed the 60% probability and historical-reliability screen; inspect the market categories for exploratory forecasts."
-            )
-            elapsed = max(0.001, time.perf_counter() - self._scanner_context["started"])
-            rate = scanned * 60.0 / elapsed
-            average = self._scanner_context["analysis_seconds"] / max(1, scanned)
-            self.scanner_summary.setText(
-                f"{status}  •  {scanned}/{len(fixtures)} fixtures analysed  •  "
-                f"{len(all_candidates):,} market selections retained  •  {len(skipped)} skipped. "
-                f"Speed: {rate:.1f} fixtures/min; average analysis {average:.2f}s/fixture; "
-                f"history {self._scanner_context['history_seconds']:.1f}s; "
-                f"model training {self._scanner_context['training_seconds']:.1f}s."
-                + top_pick_note
-            )
-            self.scanner_summary.setToolTip("\n".join(skipped) if skipped else
-                "Completed fixture results are retained in this session.")
-            self.api_message.setText(
-                f"Automatic scan {status.lower()}: {scanned} analysed, {len(skipped)} skipped. "
-                "This scan used local history only and made no API requests."
-            )
-
-        try:
-            self.scanner_summary.setText(
-                f"Scanning {len(fixtures)} visible fixtures using local historical data. "
-                "You can stop the scan at any time."
-            )
-            for index, fixture in enumerate(fixtures):
-                QApplication.processEvents()
-                if self._scanner_cancel_requested:
-                    break
-                teams = fixture.get("teams") or {}
-                home = (teams.get("home") or {}).get("name", "Home")
-                away = (teams.get("away") or {}).get("name", "Away")
-                self.scanner_summary.setText(
-                    f"SCANNING {index + 1}/{len(fixtures)}  •  {home} vs {away}  •  "
-                    f"{len(all_candidates):,} selections collected  •  {len(skipped)} skipped"
+    def _scanner_candidates_from_results(self, results):
+        candidates = []
+        for result in results or []:
+            fixture = result.get("fixture") or {}
+            deep_status = result.get("deep_status")
+            for candidate in result.get("candidates") or []:
+                entry = dict(candidate)
+                entry["fixture"] = fixture
+                history_note = (
+                    f"Local history: {result.get('home_history', 0)} / "
+                    f"{result.get('away_history', 0)} recent matches."
                 )
-                self.live_table.setCurrentCell(index, 0)
-                fixture_started = time.perf_counter()
-                try:
-                    result = self.analyze_selected_fixture(automatic_scan=True)
-                except Exception as exc:
-                    result = {"error": f"Analysis error: {exc}"}
-                fixture_elapsed = time.perf_counter() - fixture_started
-                if not (isinstance(result, dict) and result.get("cancelled")):
-                    self._scanner_context["analysis_seconds"] += fixture_elapsed
-                QApplication.processEvents()
-                if isinstance(result, dict) and result.get("cancelled"):
-                    break
-                if not isinstance(result, dict) or not result.get("candidates"):
-                    reason = result.get("error", "Insufficient local data") if isinstance(result, dict) else "Insufficient local data"
-                    skipped.append(f"{home} vs {away}: {reason}")
-                else:
-                    for candidate in result["candidates"]:
-                        entry = dict(candidate)
-                        entry["fixture"] = result["fixture"]
-                        entry["note"] = "Local history: {} / {} recent matches. {}".format(
-                            result["home_history"], result["away_history"], entry.get("note", "")
-                        ).strip()
-                        all_candidates.append(entry)
-                    completed += 1
-                if self._scanner_cancel_requested:
-                    break
+                details = [history_note]
+                if deep_status:
+                    details.append("Deep analysis: " + str(deep_status))
+                if entry.get("note"):
+                    details.append(str(entry["note"]))
+                entry["note"] = " ".join(details)
+                candidates.append(entry)
+        return candidates
 
-            if self._scanner_cancel_requested:
-                publish_results("SCAN STOPPED — PARTIAL RESULTS")
-            else:
-                publish_results("SCAN COMPLETE")
-        finally:
-            self._scanner_running = False
-            self._scanner_context = None
-            self._scanner_cancel_requested = False
-            self.scan_all_button.setEnabled(True)
-            self.stop_scan_button.setEnabled(False)
-            self.stop_scan_button.setText("Stop Scan")
+    def _publish_intelligent_scan_results(self, results, status, skipped=None, phase=None):
+        candidates = self._scanner_candidates_from_results(results)
+        self.scanner_results = rank_market_categories(candidates)
+        self.scanner_category.blockSignals(True)
+        self.scanner_category.clear()
+        categories = sorted(self.scanner_results)
+        if "TOP PICKS — VALIDATED" in categories:
+            categories.remove("TOP PICKS — VALIDATED")
+            categories.insert(0, "TOP PICKS — VALIDATED")
+        for category in categories:
+            self.scanner_category.addItem(category)
+        self.scanner_category.blockSignals(False)
+        self.render_scanner_category(self.scanner_category.currentText())
+        self.live_content_splitter.setSizes([260, 75, 90, 390])
+        top_count = len(self.scanner_results.get("TOP PICKS — VALIDATED", []))
+        deep_count = sum(1 for item in (results or []) if item.get("deep_status"))
+        skipped_count = len(skipped or [])
+        phase_text = f" • {phase}" if phase else ""
+        self.scanner_summary.setText(
+            f"{status}{phase_text} • {len(results or [])} fixtures with usable local history • "
+            f"{len(candidates):,} market selections • {skipped_count} skipped • "
+            f"{deep_count} deep analyses completed • {top_count} validated Top Picks."
+        )
+        self.scanner_summary.setToolTip("\\n".join(skipped or []) if skipped else
+            "Completed fixture results are retained in this session.")
+        self.api_message.setText(
+            f"{status}: local historical scan completed. Deep enrichment attempted for "
+            f"{deep_count} shortlisted fixtures; unavailable provider fields remain explicitly marked."
+        )
+
+    def _on_scanner_progress(self, payload):
+        if not isinstance(payload, dict):
+            return
+        phase = payload.get("phase", "SCANNING")
+        if phase == "FAST LOCAL SCAN":
+            results = payload.get("stage_one") or []
+            self._publish_intelligent_scan_results(
+                results, "SCANNING LOCAL HISTORY",
+                phase=f"{payload.get('completed', 0)}/{payload.get('total', 0)} "
+                      f"— {payload.get('fixture', '')}"
+            )
+        else:
+            results = payload.get("enriched") or payload.get("stage_one") or []
+            self._publish_intelligent_scan_results(
+                results, "DEEP ANALYSIS IN PROGRESS",
+                phase=f"{payload.get('completed', 0)}/{payload.get('total', 0)} "
+                      f"— {payload.get('fixture', '')}"
+            )
+
+    def _on_scanner_completed(self, payload):
+        results = payload.get("final_results") or []
+        skipped = payload.get("skipped") or []
+        status = "SCAN STOPPED — PARTIAL RESULTS" if payload.get("stopped") else "SCAN COMPLETE"
+        self._publish_intelligent_scan_results(results, status, skipped=skipped)
+        elapsed = float(payload.get("elapsed") or 0)
+        self.scanner_summary.setText(
+            self.scanner_summary.text()
+            + f" • Total time: {elapsed:.1f}s • Deep shortlist: {payload.get('deep_count', 0)}"
+        )
+        self.api_message.setText(
+            f"{status}: {len(results)} fixtures retained; {len(skipped)} skipped; "
+            f"{payload.get('deep_count', 0)} deep analyses attempted. "
+            "Missing injuries, lineups, referee or weather data is not treated as confirmation of availability."
+        )
+
+    def _on_scanner_failed(self, message):
+        self.scanner_summary.setText(f"SCANNER ERROR — {message}")
+        self.api_message.setText("The background scan stopped because of an error. Previously displayed results remain available.")
+
+    def _on_scanner_thread_finished(self):
+        self._scanner_running = False
+        self._scanner_cancel_requested = False
+        self.scan_all_button.setEnabled(True)
+        self.scanner_mode.setEnabled(True)
+        self.scanner_shortlist.setEnabled(True)
+        self.stop_scan_button.setEnabled(False)
+        self.stop_scan_button.setText("Stop Scan")
+        self._scanner_worker = None
 
     def render_scanner_category(self, category):
         if not hasattr(self, "scanner_table"):
