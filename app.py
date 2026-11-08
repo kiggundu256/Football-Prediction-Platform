@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1847,6 +1848,11 @@ class MainWindow(QMainWindow):
         all_candidates = []
         skipped = []
         completed = 0
+        # Reuse immutable scan inputs across fixtures; caches live only for this scan.
+        self._scanner_context = {
+            "history": {}, "training_loaded": False, "training_model": None,
+            "started": time.perf_counter(), "analysis_seconds": 0.0,
+        }
 
         def publish_results(status):
             self.scanner_results = rank_market_categories(all_candidates)
@@ -1868,9 +1874,13 @@ class MainWindow(QMainWindow):
                 if top_pick_count else
                 " No picks passed the 60% probability and historical-reliability screen; inspect the market categories for exploratory forecasts."
             )
+            elapsed = max(0.001, time.perf_counter() - self._scanner_context["started"])
+            rate = scanned * 60.0 / elapsed
+            average = self._scanner_context["analysis_seconds"] / max(1, scanned)
             self.scanner_summary.setText(
                 f"{status}  •  {scanned}/{len(fixtures)} fixtures analysed  •  "
-                f"{len(all_candidates):,} market selections retained  •  {len(skipped)} skipped."
+                f"{len(all_candidates):,} market selections retained  •  {len(skipped)} skipped. "
+                f"Speed: {rate:.1f} fixtures/min; average analysis {average:.2f}s/fixture."
                 + top_pick_note
             )
             self.scanner_summary.setToolTip("\n".join(skipped) if skipped else
@@ -1925,6 +1935,7 @@ class MainWindow(QMainWindow):
                 publish_results("SCAN COMPLETE")
         finally:
             self._scanner_running = False
+            self._scanner_context = None
             self._scanner_cancel_requested = False
             self.scan_all_button.setEnabled(True)
             self.stop_scan_button.setEnabled(False)
@@ -2563,8 +2574,23 @@ class MainWindow(QMainWindow):
         )
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            home_recent = self.historical_db.team_recent_matches(home_id, fixture_date, limit=5)
-            away_recent = self.historical_db.team_recent_matches(away_id, fixture_date, limit=5)
+            scan_context = getattr(self, "_scanner_context", None) if automatic_scan else None
+            def cached_history(cache_key, loader):
+                if scan_context is None:
+                    return loader()
+                cache = scan_context["history"]
+                if cache_key not in cache:
+                    cache[cache_key] = loader()
+                return cache[cache_key]
+
+            home_recent = cached_history(
+                ("id", home_id, fixture_date),
+                lambda: self.historical_db.team_recent_matches(home_id, fixture_date, limit=5),
+            )
+            away_recent = cached_history(
+                ("id", away_id, fixture_date),
+                lambda: self.historical_db.team_recent_matches(away_id, fixture_date, limit=5),
+            )
             if scan_cancelled():
                 return {"cancelled": True}
             # Merge name-matched CSV history even when API-ID history exists, so
@@ -2572,8 +2598,11 @@ class MainWindow(QMainWindow):
             for team_name, team_id, history in (
                 (home_name, home_id, home_recent), (away_name, away_id, away_recent)
             ):
-                imported = self.historical_db.team_recent_matches_by_name(
-                    team_name, fixture_date, limit=10, provider_team_id=team_id
+                imported = cached_history(
+                    ("name", self.historical_db._team_name_key(team_name), fixture_date, team_id),
+                    lambda: self.historical_db.team_recent_matches_by_name(
+                        team_name, fixture_date, limit=10, provider_team_id=team_id
+                    ),
                 )
                 combined = {(match.get("fixture") or {}).get("id"): match for match in history}
                 for match in imported:
@@ -2724,7 +2753,13 @@ class MainWindow(QMainWindow):
         home_xg_seed = max(0.05, (hr["scored_avg"] + ar["conceded_avg"]) / 2)
         away_xg_seed = max(0.05, (ar["scored_avg"] + hr["conceded_avg"]) / 2)
         model_features = build_model_features(hr, ar, home_xg_seed, away_xg_seed)
-        local_ml = train_outcome_model(self.store.training_records())
+        if automatic_scan and scan_context is not None:
+            if not scan_context["training_loaded"]:
+                scan_context["training_model"] = train_outcome_model(self.store.training_records())
+                scan_context["training_loaded"] = True
+            local_ml = scan_context["training_model"]
+        else:
+            local_ml = train_outcome_model(self.store.training_records())
         ml_probabilities = predict_outcome(local_ml, model_features) if local_ml else None
         injuries_data = self.store.get_provider_cache(f"injuries:{selected_fixture_id}", 30 * 60)
         lineups_data = self.store.get_provider_cache(f"lineups:{selected_fixture_id}", 10 * 60)
