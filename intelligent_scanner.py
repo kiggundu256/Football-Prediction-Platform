@@ -229,6 +229,7 @@ class IntelligentScannerWorker(QThread):
             "home_history": len(home_used), "away_history": len(away_used),
             "profiles": {"home": hr, "away": ar}, "model_features": features,
             "home_xg": ensemble["home_xg"], "away_xg": ensemble["away_xg"],
+            "ml_probabilities": ml_probabilities, "ml_samples": model["samples"] if model else 0,
             "corner_averages": corners, "markets": markets,
         }
 
@@ -277,7 +278,7 @@ class IntelligentScannerWorker(QThread):
         }
         ensemble = predict_ensemble(
             result["profiles"]["home"], result["profiles"]["away"],
-            ml_probabilities=None, context=context,
+            ml_probabilities=result.get("ml_probabilities"), ml_samples=result.get("ml_samples", 0), context=context,
         )
         markets = ensemble["markets"]
         corners = result.get("corner_averages")
@@ -310,6 +311,17 @@ class IntelligentScannerWorker(QThread):
             "context": {"injuries": injuries, "lineups": lineups, "weather": weather, "venue": venue_data},
         })
         return result
+
+    @staticmethod
+    def _merge_enriched(stage_one, enriched):
+        replacements = {
+            item.get("fixture", {}).get("fixture_id"): item for item in enriched
+        }
+        merged = []
+        for original in stage_one:
+            fixture_id = original.get("fixture", {}).get("fixture_id")
+            merged.append(replacements.get(fixture_id, original))
+        return merged
 
     def run(self):
         started = time.perf_counter()
@@ -366,7 +378,7 @@ class IntelligentScannerWorker(QThread):
                     "skipped": len(skipped), "elapsed": time.perf_counter() - started,
                 })
             self.completed.emit({
-                "stage_one": stage_one, "final_results": enriched,
+                "stage_one": stage_one, "final_results": self._merge_enriched(stage_one, enriched),
                 "skipped": skipped, "stopped": self._stopped(),
                 "deep_count": len(enriched), "elapsed": time.perf_counter() - started,
             })
