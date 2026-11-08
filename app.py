@@ -2593,11 +2593,13 @@ class MainWindow(QMainWindow):
                 return cache[cache_key]
 
             home_recent = cached_history(
-                ("id", home_id, fixture_date),
+                ("id", home_id, fixture_date) if home_id is not None else
+                ("name-id-fallback", self.historical_db._team_name_key(home_name), fixture_date),
                 lambda: self.historical_db.team_recent_matches(home_id, fixture_date, limit=5),
             )
             away_recent = cached_history(
-                ("id", away_id, fixture_date),
+                ("id", away_id, fixture_date) if away_id is not None else
+                ("name-id-fallback", self.historical_db._team_name_key(away_name), fixture_date),
                 lambda: self.historical_db.team_recent_matches(away_id, fixture_date, limit=5),
             )
             if scan_cancelled():
