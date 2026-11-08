@@ -295,7 +295,10 @@ class IntelligentScannerWorker(QThread):
             if "limit" in str(exc).casefold() or "429" in str(exc):
                 self._provider_quota_exhausted = True
         if self._stopped() or self._provider_quota_exhausted:
-            result["deep_status"] = "Stopped during enrichment"
+            result["deep_status"] = (
+                "Stopped during enrichment" if self._stopped()
+                else "Provider request limit reached; remaining optional calls skipped"
+            )
             return result
         if not self._provider_quota_exhausted:
             try:
