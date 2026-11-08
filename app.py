@@ -1934,6 +1934,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "scanner_table"):
             return
         rows = self.scanner_results.get(category, []) if category else []
+        self.scanner_table.clearSpans()
         if category == "TOP PICKS — VALIDATED" and not rows:
             self.scanner_table.setRowCount(1)
             self.scanner_table.setItem(
@@ -1945,7 +1946,6 @@ class MainWindow(QMainWindow):
             )
             self.scanner_table.setSpan(0, 0, 1, self.scanner_table.columnCount())
             return
-        self.scanner_table.clearSpans()
         self.scanner_table.setRowCount(len(rows))
         for row, item in enumerate(rows):
             fixture = item.get("fixture") or {}
