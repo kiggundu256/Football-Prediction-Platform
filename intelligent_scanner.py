@@ -69,6 +69,7 @@ class IntelligentScannerWorker(QThread):
         self.mode = mode
         self.shortlist_size = int(shortlist_size)
         self._stop_event = threading.Event()
+        self._provider_quota_exhausted = False
 
     def request_stop(self):
         self._stop_event.set()
@@ -280,6 +281,9 @@ class IntelligentScannerWorker(QThread):
         if not original or not fixture_id or not self.api_key:
             result["deep_status"] = "Skipped: no fixture ID or API key"
             return result
+        if self._provider_quota_exhausted:
+            result["deep_status"] = "Skipped: provider request limit was reached earlier in this scan"
+            return result
         fixture_data = original.get("fixture") or {}
         venue = fixture_data.get("venue") or {}
         injuries = lineups = weather = venue_data = None
@@ -288,17 +292,22 @@ class IntelligentScannerWorker(QThread):
             injuries = fetch_fixture_injuries(fixture_id, api_key=self.api_key)
         except ApiFootballError as exc:
             errors.append("Injuries: " + str(exc))
-        if self._stopped():
+            if "limit" in str(exc).casefold() or "429" in str(exc):
+                self._provider_quota_exhausted = True
+        if self._stopped() or self._provider_quota_exhausted:
             result["deep_status"] = "Stopped during enrichment"
             return result
-        try:
-            lineups = fetch_fixture_lineups(fixture_id, api_key=self.api_key)
-        except ApiFootballError as exc:
-            errors.append("Lineups: " + str(exc))
-        if self._stopped():
+        if not self._provider_quota_exhausted:
+            try:
+                lineups = fetch_fixture_lineups(fixture_id, api_key=self.api_key)
+            except ApiFootballError as exc:
+                errors.append("Lineups: " + str(exc))
+                if "limit" in str(exc).casefold() or "429" in str(exc):
+                    self._provider_quota_exhausted = True
+        if self._stopped() or self._provider_quota_exhausted:
             result["deep_status"] = "Stopped during enrichment"
             return result
-        if venue.get("id"):
+        if venue.get("id") and not self._provider_quota_exhausted:
             try:
                 venue_data = fetch_venue_details(venue["id"], api_key=self.api_key)
                 if isinstance(venue_data, dict):
@@ -308,6 +317,10 @@ class IntelligentScannerWorker(QThread):
                     )
             except (ApiFootballError, TypeError, ValueError) as exc:
                 errors.append("Venue/weather: " + str(exc))
+                if isinstance(exc, ApiFootballError) and (
+                    "limit" in str(exc).casefold() or "429" in str(exc)
+                ):
+                    self._provider_quota_exhausted = True
         context = {
             "injuries": injuries is not None, "lineups": lineups is not None,
             "referee": bool(fixture_data.get("referee")), "weather": weather is not None,
