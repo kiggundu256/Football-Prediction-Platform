@@ -225,6 +225,26 @@ def rank_market_categories(candidates):
         entries.sort(key=lambda item: item["probability"], reverse=True)
         for rank, item in enumerate(entries, 1):
             item["rank"] = rank
+    # Cross-market board compares all generated selections. Validated Top Picks
+    # remain separately restricted to historically supported calibration ranges.
+    reliability_order = {
+        "SUPPORTED": 0, "UNDERCONFIDENT": 1, "CAUTION": 2,
+        "NO CLEAR OVERCONFIDENCE": 3, "OVERCONFIDENT": 5,
+        "LOW SAMPLE": 6, "NOT CALIBRATED": 7,
+    }
+    all_opportunities = [dict(item) for item in source]
+    def opportunity_key(item):
+        label = str(item.get("reliability") or "NOT CALIBRATED").split(" (n=", 1)[0].upper()
+        try:
+            sample_count = int(str(item.get("reliability")).split("(n=", 1)[1].split(")", 1)[0])
+        except (IndexError, ValueError):
+            sample_count = 0
+        return (reliability_order.get(label, 7), -float(item.get("probability", 0.0)), -sample_count)
+    all_opportunities.sort(key=opportunity_key)
+    for rank, item in enumerate(all_opportunities, 1):
+        item["rank"] = rank
+    grouped["ALL MARKET OPPORTUNITIES"] = all_opportunities
+
     top_picks = _validated_top_picks(source)
     for rank, item in enumerate(top_picks, 1):
         item["rank"] = rank
