@@ -162,7 +162,7 @@ class HistoricalDatabase:
                 WHERE (home_team = ? OR away_team = ?)
                   AND match_date < ? AND status IN ('FT','AET','PEN')
                   AND home_goals IS NOT NULL AND away_goals IS NOT NULL
-                ORDER BY match_date DESC, fixture_id DESC LIMIT ?
+                ORDER BY COALESCE(json_extract(payload_json, '$.fixture.date'), match_date) DESC, fixture_id DESC LIMIT ?
             """, (str(team_name), str(team_name), before_date, int(limit))).fetchall()
             if not rows:
                 # Compatibility fallback for CSV/provider aliases with punctuation,
@@ -172,7 +172,7 @@ class HistoricalDatabase:
                     SELECT payload_json FROM historical_matches
                     WHERE match_date < ? AND status IN ('FT','AET','PEN')
                       AND home_goals IS NOT NULL AND away_goals IS NOT NULL
-                    ORDER BY match_date DESC, fixture_id DESC
+                    ORDER BY COALESCE(json_extract(payload_json, '$.fixture.date'), match_date) DESC, fixture_id DESC
                 """, (before_date,)).fetchall()
         matches = []
         for row in rows:
@@ -260,7 +260,7 @@ class HistoricalDatabase:
                     SELECT r.cache_key, h.payload_json, h.match_date, h.fixture_id,
                            ROW_NUMBER() OVER (
                                PARTITION BY r.cache_key
-                               ORDER BY h.match_date DESC, h.fixture_id DESC
+                               ORDER BY COALESCE(json_extract(h.payload_json, '$.fixture.date'), h.match_date) DESC, h.fixture_id DESC
                            ) AS row_number
                     FROM requested r
                     JOIN historical_matches h
@@ -277,7 +277,7 @@ class HistoricalDatabase:
                 )
                 SELECT cache_key, payload_json
                 FROM ranked WHERE row_number <= ?
-                ORDER BY cache_key, match_date DESC, fixture_id DESC
+                ORDER BY cache_key, COALESCE(json_extract(payload_json, '$.fixture.date'), match_date) DESC, fixture_id DESC
             """
             with self.connect() as db:
                 rows = db.execute(query, params).fetchall()
