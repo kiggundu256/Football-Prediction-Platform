@@ -60,7 +60,7 @@ class IntelligentScannerWorker(QThread):
     failed = Signal(str)
 
     def __init__(self, fixtures, database_path, training_records, calibration_profile,
-                 api_key="", mode="intelligent", shortlist_size=20):
+                 api_key="", mode="intelligent", shortlist_size=20, history_limit=5):
         super().__init__()
         self.fixtures = list(fixtures)
         self.database_path = str(database_path)
@@ -69,6 +69,7 @@ class IntelligentScannerWorker(QThread):
         self.api_key = api_key or ""
         self.mode = mode
         self.shortlist_size = int(shortlist_size)
+        self.history_limit = 10 if int(history_limit) >= 10 else 5
         self._stop_event = threading.Event()
         self._provider_quota_exhausted = False
 
@@ -129,7 +130,7 @@ class IntelligentScannerWorker(QThread):
                     "key": request_key, "team_id": team_id,
                     "team_name": team_name, "before_date": before_date,
                 })
-        batched = database.team_recent_matches_batch(requests, limit=10)
+        batched = database.team_recent_matches_batch(requests, limit=self.history_limit)
         request_by_key = {item["key"]: item for item in requests}
         for cache_key, request_key in key_map.items():
             matches = batched.get(request_key, [])
@@ -149,9 +150,9 @@ class IntelligentScannerWorker(QThread):
         )
         if key in cache:
             return cache[key]
-        matches = database.team_recent_matches(team_id, before_date, limit=5) if team_id else []
+        matches = database.team_recent_matches(team_id, before_date, limit=self.history_limit) if team_id else []
         imported = database.team_recent_matches_by_name(
-            team_name, before_date, limit=10, provider_team_id=team_id
+            team_name, before_date, limit=self.history_limit, provider_team_id=team_id
         )
         combined = {}
         for match in matches + imported:
@@ -161,7 +162,7 @@ class IntelligentScannerWorker(QThread):
             combined.values(),
             key=lambda match: (match.get("fixture") or {}).get("date", ""),
             reverse=True,
-        )[:10]
+        )[:self.history_limit]
         cache[key] = ordered
         return ordered
 
