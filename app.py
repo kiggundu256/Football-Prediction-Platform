@@ -44,6 +44,7 @@ from data_quality import inspect_data_quality
 from player_intelligence import PlayerIntelligenceDatabase
 from automatic_market_scanner import build_market_candidates, rank_market_categories
 from intelligent_scanner import IntelligentScannerWorker
+from prediction_tracker import PredictionTracker
 
 APP_NAME = ""
 KEYRING_SERVICE = "FootballPredictionPlatform"
@@ -344,6 +345,7 @@ class MainWindow(QMainWindow):
         self.csv_importer = HistoricalCsvImporter(self.store.path)
         self.reconciliation_db = HistoricalReconciliation(self.store.path)
         self.player_intelligence_db = PlayerIntelligenceDatabase(self.store.path)
+        self.prediction_tracker = PredictionTracker(self.store.path)
         self.setStyleSheet(APP_STYLESHEET)
         root = QWidget(); outer = QVBoxLayout(root)
         head = QHBoxLayout()
@@ -362,6 +364,7 @@ class MainWindow(QMainWindow):
         self.add_scrollable_tab(self.data_library_page(), "Data Library")
         self.add_scrollable_tab(self.reconciliation_page(), "Reconciliation")
         self.add_scrollable_tab(self.player_intelligence_page(), "Player Intelligence")
+        self.add_scrollable_tab(self.prediction_tracker_page(), "Prediction Tracker")
         outer.addWidget(self.tabs); self.setCentralWidget(root)
         self.refresh_history()
         self.update_api_status()
@@ -1924,9 +1927,10 @@ class MainWindow(QMainWindow):
         self.scanner_category.blockSignals(True)
         self.scanner_category.clear()
         categories = sorted(self.scanner_results)
-        if "TOP PICKS — VALIDATED" in categories:
-            categories.remove("TOP PICKS — VALIDATED")
-            categories.insert(0, "TOP PICKS — VALIDATED")
+        for priority in ("ALL MARKET OPPORTUNITIES", "TOP PICKS — VALIDATED"):
+            if priority in categories:
+                categories.remove(priority)
+                categories.insert(0, priority)
         for category in categories:
             self.scanner_category.addItem(category)
         self.scanner_category.blockSignals(False)
@@ -1972,6 +1976,9 @@ class MainWindow(QMainWindow):
         skipped = payload.get("skipped") or []
         status = "SCAN STOPPED — PARTIAL RESULTS" if payload.get("stopped") else "SCAN COMPLETE"
         self._publish_intelligent_scan_results(results, status, skipped=skipped)
+        capture = self.prediction_tracker.capture_scan(results)
+        if hasattr(self, "tracker_table"):
+            self.refresh_prediction_tracker()
         elapsed = float(payload.get("elapsed") or 0)
         self.scanner_summary.setText(
             self.scanner_summary.text()
