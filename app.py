@@ -2955,6 +2955,21 @@ class MainWindow(QMainWindow):
             )
             return
 
+        tracker_candidates = build_market_candidates(
+            home_name, away_name, markets, home_xg, away_xg
+        )
+        self.prediction_tracker.capture_scan([{
+            "fixture": fixture_info,
+            "candidates": tracker_candidates,
+            "markets": markets,
+            "home_xg": home_xg,
+            "away_xg": away_xg,
+            "home_history": len(home_used),
+            "away_history": len(away_used),
+        }])
+        if hasattr(self, "tracker_table"):
+            self.refresh_prediction_tracker()
+
         scores = ", ".join(f"{h}-{a} ({p:.1%})" for h, a, p in markets["top_scores"][:5])
         explanation = build_analysis_explanation(
             home_name, away_name, hr, ar, home_xg, away_xg, markets
