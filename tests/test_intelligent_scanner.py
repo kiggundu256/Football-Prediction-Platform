@@ -148,8 +148,29 @@ class IntelligentScannerTests(unittest.TestCase):
                               "away": {"id": index + 100, "name": "Opponent {}".format(index)}},
                     "goals": {"home": index % 3, "away": 1},
                 })
+            fixtures.extend([
+                {
+                    "fixture": {"id": 13, "date": "2024-01-12T19:00:00+00:00",
+                                "status": {"short": "FT"}},
+                    "league": {"id": 1, "name": "Test League", "season": 2024},
+                    "teams": {"home": {"id": 1, "name": "Home"},
+                              "away": {"id": 113, "name": "Opponent 13"}},
+                    "goals": {"home": 2, "away": 1},
+                },
+                {
+                    "fixture": {"id": 14, "date": "2024-01-12T12:00:00+00:00",
+                                "status": {"short": "FT"}},
+                    "league": {"id": 1, "name": "Test League", "season": 2024},
+                    "teams": {"home": {"id": 1, "name": "Home"},
+                              "away": {"id": 114, "name": "Opponent 14"}},
+                    "goals": {"home": 1, "away": 0},
+                },
+            ])
             database.upsert_fixtures(fixtures)
-            for limit, expected in ((5, [12, 11, 10, 9, 8]), (10, list(range(12, 2, -1)))):
+            for limit, expected in (
+                (5, [13, 12, 14, 11, 10]),
+                (10, [13, 12, 14, 11, 10, 9, 8, 7, 6, 5]),
+            ):
                 worker = IntelligentScannerWorker(
                     [], database.path, [], None, mode="fast", history_limit=limit
                 )
