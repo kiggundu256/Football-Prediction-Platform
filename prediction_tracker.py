@@ -161,16 +161,20 @@ class PredictionTracker:
                 ok = total_goals >= 4
             return ok, str(total_goals)
         if "clean sheet" in category_key or "win to nil" in category_key:
-            team = selection.rsplit(" ", 2)[0].casefold()
-            is_home = team == home.casefold()
+            is_home = selection.casefold().startswith(home.casefold())
+            is_away = selection.casefold().startswith(away.casefold())
+            if not is_home and not is_away:
+                return None, None
             scored, conceded = (home_goals, away_goals) if is_home else (away_goals, home_goals)
             ok = conceded == 0 if "clean sheet" in category_key else (scored > conceded and conceded == 0)
             return ok, f"{home_goals}-{away_goals}"
         if "corner" in category_key:
             if home_corners is None or away_corners is None:
                 return None, None
-            is_home = category_key.startswith("home")
-            is_away = category_key.startswith("away")
+            is_home = category_key.startswith(home.casefold())
+            is_away = category_key.startswith(away.casefold())
+            if not is_home and not is_away:
+                return None, None
             actual_count = home_corners if is_home else away_corners if is_away else home_corners + away_corners
             match = re.search(r"(over|under)\s+(\d+(?:\.\d+)?)", text)
             if not match:
