@@ -239,7 +239,7 @@ def rank_market_categories(candidates):
             sample_count = int(str(item.get("reliability")).split("(n=", 1)[1].split(")", 1)[0])
         except (IndexError, ValueError):
             sample_count = 0
-        return (reliability_order.get(label, 7), -float(item.get("probability", 0.0)), -sample_count)
+        return (-float(item.get("probability", 0.0)), reliability_order.get(label, 7), -sample_count)
     all_opportunities.sort(key=opportunity_key)
     for rank, item in enumerate(all_opportunities, 1):
         item["rank"] = rank
