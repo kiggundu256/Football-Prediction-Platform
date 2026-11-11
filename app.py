@@ -5,7 +5,7 @@ import os
 import sqlite3
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import keyring
@@ -4107,6 +4107,23 @@ class MainWindow(QMainWindow):
         self.tracker_check_button.clicked.connect(self.check_prediction_tracker_results)
         controls.addWidget(self.tracker_check_button)
         layout.addLayout(controls)
+        filters = QHBoxLayout()
+        filters.addWidget(QLabel("Date range:"))
+        self.tracker_period_filter = QComboBox()
+        self.tracker_period_filter.addItems(["All time", "Today", "Yesterday", "Last 7 days", "Last 30 days"])
+        self.tracker_period_filter.currentTextChanged.connect(self.refresh_prediction_tracker)
+        filters.addWidget(self.tracker_period_filter)
+        self.tracker_search = QLineEdit()
+        self.tracker_search.setPlaceholderText("Search team, competition or selection…")
+        self.tracker_search.textChanged.connect(self.refresh_prediction_tracker)
+        filters.addWidget(self.tracker_search, 2)
+        filters.addWidget(QLabel("Minimum probability:"))
+        self.tracker_min_probability = QSpinBox()
+        self.tracker_min_probability.setRange(0, 100)
+        self.tracker_min_probability.setSuffix("%")
+        self.tracker_min_probability.valueChanged.connect(self.refresh_prediction_tracker)
+        filters.addWidget(self.tracker_min_probability)
+        layout.addLayout(filters)
         self.tracker_table = QTableWidget(0, 9)
         self.tracker_table.setHorizontalHeaderLabels(["Saved", "Kickoff", "Competition", "Fixture", "Market", "Selection", "Probability", "Reliability", "Result"])
         self.tracker_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -4143,10 +4160,29 @@ class MainWindow(QMainWindow):
         self.tracker_market_filter.blockSignals(False)
         status = self.tracker_status_filter.currentText() if hasattr(self, "tracker_status_filter") else "All"
         market = self.tracker_market_filter.currentText() if hasattr(self, "tracker_market_filter") else "All"
-        rows = self.prediction_tracker.records(status=status, market=market, limit=2000)
+        period = self.tracker_period_filter.currentText() if hasattr(self, "tracker_period_filter") else "All time"
+        now_local = datetime.now().astimezone()
+        today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        created_after = created_before = None
+        if period == "Today":
+            created_after = today_start.astimezone(timezone.utc).isoformat()
+        elif period == "Yesterday":
+            created_after = (today_start - timedelta(days=1)).astimezone(timezone.utc).isoformat()
+            created_before = today_start.astimezone(timezone.utc).isoformat()
+        elif period == "Last 7 days":
+            created_after = (now_local - timedelta(days=7)).astimezone(timezone.utc).isoformat()
+        elif period == "Last 30 days":
+            created_after = (now_local - timedelta(days=30)).astimezone(timezone.utc).isoformat()
+        search = self.tracker_search.text().strip() if hasattr(self, "tracker_search") else ""
+        minimum_probability = (self.tracker_min_probability.value() / 100.0) if hasattr(self, "tracker_min_probability") else 0.0
+        rows = self.prediction_tracker.records(
+            status=status, market=market, limit=2000, search=search,
+            min_probability=minimum_probability, created_after=created_after,
+            created_before=created_before,
+        )
         self.tracker_table.setRowCount(len(rows))
         for row_index, record in enumerate(rows):
-            saved = (record.get("settled_at_utc") or "")[:16].replace("T", " ") or "Batch {}".format(record.get("batch_id"))
+            saved = (record.get("created_at_utc") or "")[:16].replace("T", " ")
             kickoff = str(record.get("kickoff_utc") or "")[:16].replace("T", " ")
             values = [
                 saved, kickoff, record.get("competition", ""),
