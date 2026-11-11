@@ -1665,12 +1665,6 @@ class MainWindow(QMainWindow):
         self.analyze_fixture_button = QPushButton("Analyze Selected Match")
         self.analyze_fixture_button.clicked.connect(self.analyze_selected_fixture)
         controls.addWidget(self.analyze_fixture_button)
-        controls.addWidget(QLabel("Recent form:"))
-        self.recent_form_limit = QComboBox()
-        self.recent_form_limit.addItem("Last 5 matches", 5)
-        self.recent_form_limit.addItem("Last 10 matches", 10)
-        self.recent_form_limit.setToolTip("Use the latest completed matches strictly before the selected fixture kickoff.")
-        controls.addWidget(self.recent_form_limit)
         controls.addStretch()
         box.addLayout(controls)
 
@@ -1687,6 +1681,12 @@ class MainWindow(QMainWindow):
         self.fixture_status_filter.addItems(["All statuses", "Scheduled", "Live", "Finished"])
         self.fixture_status_filter.currentTextChanged.connect(self.apply_fixture_filters)
         filters.addWidget(self.fixture_status_filter, 1)
+        filters.addWidget(QLabel("Recent form:"))
+        self.recent_form_limit = QComboBox()
+        self.recent_form_limit.addItem("Last 5 matches", 5)
+        self.recent_form_limit.addItem("Last 10 matches", 10)
+        self.recent_form_limit.setToolTip("Use the latest completed matches strictly before the selected fixture kickoff.")
+        filters.addWidget(self.recent_form_limit)
         clear_filters = QPushButton("Clear filters")
         clear_filters.clicked.connect(self.clear_fixture_filters)
         filters.addWidget(clear_filters)
@@ -2977,7 +2977,7 @@ class MainWindow(QMainWindow):
             f"{(item.get('league') or {}).get('name', 'Unknown')} • Analysis #{prediction_id}\\n\\n"
             "MODEL INPUTS\\n"
             f"Historical completed matches: {home_name} {hr['played']}, {away_name} {ar['played']} "
-            "(up to 5 per team; local historical database is preferred when available)\\n"
+            "(selected latest completed matches before kickoff; local historical database is preferred)\\n"
             f"Estimated goals (xG-style baseline): {home_name} {home_xg:.2f} — "
             f"{away_xg:.2f} {away_name}\\n\\n"
             "PREDICTED MARKETS\\n"
