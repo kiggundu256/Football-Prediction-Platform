@@ -1864,9 +1864,11 @@ class MainWindow(QMainWindow):
                 "Demo fixtures are illustrative and are not scanned. Load real provider fixtures first."
             )
             return
-        fixtures = list(self.visible_fixtures)
+        # Scan every loaded scheduled fixture, independent of the table's search,
+        # competition and status filters. UI filters must never hide scan candidates.
+        fixtures = filter_fixtures(self.live_fixtures, status="Scheduled")
         if not fixtures:
-            self.scanner_summary.setText("No visible fixtures to scan. Load fixtures or clear the current filters.")
+            self.scanner_summary.setText("No scheduled fixtures are available in the loaded fixture set.")
             return
 
         mode = self.scanner_mode.currentData() if hasattr(self, "scanner_mode") else "intelligent"
@@ -1888,7 +1890,7 @@ class MainWindow(QMainWindow):
         self.stop_scan_button.setText("Stop Scan")
         self.scanner_results = {}
         self.scanner_summary.setText(
-            f"Starting {len(fixtures)} fixtures in the background. "
+            f"Starting a full scan of all {len(fixtures)} loaded scheduled fixtures in the background. "
             "Stage 1 uses local history; Stage 2 enriches the selected shortlist."
         )
         self._scanner_worker = IntelligentScannerWorker(
