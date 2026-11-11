@@ -173,9 +173,7 @@ class PredictionTracker:
                 return None, None
             is_home = category_key.startswith(home.casefold())
             is_away = category_key.startswith(away.casefold())
-            if not is_home and not is_away:
-                return None, None
-            actual_count = home_corners if is_home else away_corners if is_away else home_corners + away_corners
+            actual_count = float(home_corners) if is_home else float(away_corners) if is_away else float(home_corners) + float(away_corners)
             match = re.search(r"(over|under)\s+(\d+(?:\.\d+)?)", text)
             if not match:
                 return None, None
