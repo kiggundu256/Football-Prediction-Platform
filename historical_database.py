@@ -307,7 +307,7 @@ class HistoricalDatabase:
                 WHERE (home_team_id=? OR away_team_id=?)
                   AND match_date < ? AND status IN ('FT','AET','PEN')
                   AND home_goals IS NOT NULL AND away_goals IS NOT NULL
-                ORDER BY match_date DESC, fixture_id DESC LIMIT ?
+                ORDER BY COALESCE(json_extract(payload_json, '$.fixture.date'), match_date) DESC, fixture_id DESC LIMIT ?
             """, (int(team_id), int(team_id), before_date, int(limit))).fetchall()
         return [json.loads(row["payload_json"]) for row in rows]
 
