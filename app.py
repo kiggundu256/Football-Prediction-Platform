@@ -4,7 +4,8 @@ import json
 import os
 import sqlite3
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import keyring
@@ -42,6 +43,8 @@ from historical_reconciliation import HistoricalReconciliation
 from data_quality import inspect_data_quality
 from player_intelligence import PlayerIntelligenceDatabase
 from automatic_market_scanner import build_market_candidates, rank_market_categories
+from intelligent_scanner import IntelligentScannerWorker
+from prediction_tracker import PredictionTracker
 
 APP_NAME = ""
 KEYRING_SERVICE = "FootballPredictionPlatform"
@@ -342,6 +345,7 @@ class MainWindow(QMainWindow):
         self.csv_importer = HistoricalCsvImporter(self.store.path)
         self.reconciliation_db = HistoricalReconciliation(self.store.path)
         self.player_intelligence_db = PlayerIntelligenceDatabase(self.store.path)
+        self.prediction_tracker = PredictionTracker(self.store.path)
         self.setStyleSheet(APP_STYLESHEET)
         root = QWidget(); outer = QVBoxLayout(root)
         head = QHBoxLayout()
@@ -360,6 +364,7 @@ class MainWindow(QMainWindow):
         self.add_scrollable_tab(self.data_library_page(), "Data Library")
         self.add_scrollable_tab(self.reconciliation_page(), "Reconciliation")
         self.add_scrollable_tab(self.player_intelligence_page(), "Player Intelligence")
+        self.add_scrollable_tab(self.prediction_tracker_page(), "Prediction Tracker")
         outer.addWidget(self.tabs); self.setCentralWidget(root)
         self.refresh_history()
         self.update_api_status()
@@ -1676,6 +1681,12 @@ class MainWindow(QMainWindow):
         self.fixture_status_filter.addItems(["All statuses", "Scheduled", "Live", "Finished"])
         self.fixture_status_filter.currentTextChanged.connect(self.apply_fixture_filters)
         filters.addWidget(self.fixture_status_filter, 1)
+        filters.addWidget(QLabel("Recent form:"))
+        self.recent_form_limit = QComboBox()
+        self.recent_form_limit.addItem("Last 5 matches", 5)
+        self.recent_form_limit.addItem("Last 10 matches", 10)
+        self.recent_form_limit.setToolTip("Use the latest completed matches strictly before the selected fixture kickoff.")
+        filters.addWidget(self.recent_form_limit)
         clear_filters = QPushButton("Clear filters")
         clear_filters.clicked.connect(self.clear_fixture_filters)
         filters.addWidget(clear_filters)
@@ -1768,12 +1779,30 @@ class MainWindow(QMainWindow):
         self.scan_all_button.setToolTip("Analyse every visible fixture using local historical data and rank its markets below.")
         self.scan_all_button.clicked.connect(self.scan_all_fixtures)
         scanner_title_row.addWidget(self.scan_all_button)
+        self.stop_scan_button = QPushButton("Stop Scan")
+        self.stop_scan_button.setEnabled(False)
+        self.stop_scan_button.setToolTip("Stop after the current fixture finishes; completed fixture results will be kept.")
+        self.stop_scan_button.clicked.connect(self.stop_scanner)
+        scanner_title_row.addWidget(self.stop_scan_button)
         scanner_layout.addLayout(scanner_title_row)
         self.scanner_summary = QLabel("Load real fixtures, then select Scan All Fixtures. Results will be grouped by market and ranked by estimated probability.")
         self.scanner_summary.setWordWrap(True)
         self.scanner_summary.setStyleSheet("color:#AFC3DF;padding:4px;background:#111D30;border:1px solid #26364D;border-radius:6px")
         scanner_layout.addWidget(self.scanner_summary)
         scanner_filters = QHBoxLayout()
+        scanner_filters.addWidget(QLabel("Scan mode:"))
+        self.scanner_mode = QComboBox()
+        self.scanner_mode.addItem("Intelligent Scan — local scan + deep top 20", "intelligent")
+        self.scanner_mode.addItem("Fast Scan Only — local history", "fast")
+        self.scanner_mode.addItem("Deep Scan All — every fixture", "deep_all")
+        self.scanner_mode.setToolTip("Intelligent mode scans all fixtures locally, then enriches only the best shortlist.")
+        scanner_filters.addWidget(self.scanner_mode, 2)
+        scanner_filters.addWidget(QLabel("Deep shortlist:"))
+        self.scanner_shortlist = QComboBox()
+        for shortlist_count in (5, 10, 15, 20):
+            self.scanner_shortlist.addItem(f"{shortlist_count} fixtures", shortlist_count)
+        self.scanner_shortlist.setCurrentIndex(3)
+        scanner_filters.addWidget(self.scanner_shortlist)
         scanner_filters.addWidget(QLabel("Market category:"))
         self.scanner_category = QComboBox()
         self.scanner_category.addItem("Scan results will appear here")
@@ -1800,6 +1829,9 @@ class MainWindow(QMainWindow):
         self.live_content_splitter.setStretchFactor(3, 3)
         self.live_content_splitter.setSizes([330, 95, 115, 280])
         self.scanner_results = {}
+        self._scanner_cancel_requested = False
+        self._scanner_worker = None
+        self._scanner_running = False
         box.addWidget(self.live_content_splitter, 1)
         self.set_match_intelligence_sections({
             "Injuries & suspensions": ["Not loaded"],
@@ -1810,78 +1842,193 @@ class MainWindow(QMainWindow):
         })
         return page
 
-    def scan_all_fixtures(self):
-        """Analyse visible fixtures from local history and render one ranked market workspace."""
-        if self.fixture_data_mode == "demo":
-            self.scanner_summary.setText("Demo fixtures are illustrative and are not scanned. Load real provider fixtures first.")
+    def stop_scanner(self):
+        """Request cooperative cancellation from the background scanner."""
+        worker = getattr(self, "_scanner_worker", None)
+        if not getattr(self, "_scanner_running", False) or worker is None:
             return
-        fixtures = list(self.visible_fixtures)
-        if not fixtures:
-            self.scanner_summary.setText("No visible fixtures to scan. Load fixtures or clear the current filters.")
-            return
-        self.scan_all_button.setEnabled(False)
-        self.scanner_summary.setText(f"Scanning {len(fixtures)} visible fixtures using the local historical database. No API requests are made by this scan…")
-        QApplication.processEvents()
-        all_candidates = []
-        skipped = []
-        for index, fixture in enumerate(fixtures):
-            teams = fixture.get("teams") or {}
-            home = (teams.get("home") or {}).get("name", "Home")
-            away = (teams.get("away") or {}).get("name", "Away")
-            self.scanner_summary.setText(
-                f"SCANNING {index + 1}/{len(fixtures)}  •  {home} vs {away}  •  "
-                f"{len(all_candidates):,} market selections collected  •  {len(skipped)} skipped"
-            )
-            QApplication.processEvents()
-            self.live_table.setCurrentCell(index, 0)
-            try:
-                result = self.analyze_selected_fixture(automatic_scan=True)
-            except Exception as exc:
-                result = {"error": f"Analysis error: {exc}"}
-            if not isinstance(result, dict) or not result.get("candidates"):
-                reason = result.get("error", "Insufficient local data") if isinstance(result, dict) else "Insufficient local data"
-                skipped.append(f"{home} vs {away}: {reason}")
-                continue
-            for candidate in result["candidates"]:
-                entry = dict(candidate)
-                entry["fixture"] = result["fixture"]
-                entry["note"] = "Local history: {} / {} recent matches. {}".format(
-                    result["home_history"], result["away_history"], entry.get("note", "")
-                ).strip()
-                all_candidates.append(entry)
+        self._scanner_cancel_requested = True
+        worker.request_stop()
+        self.stop_scan_button.setEnabled(False)
+        self.stop_scan_button.setText("Stopping…")
         self.scanner_summary.setText(
-            f"FINALISING RESULTS  •  {len(fixtures)}/{len(fixtures)} fixtures checked  •  "
-            f"{len(all_candidates):,} market selections collected"
+            "STOP REQUESTED — the worker will finish its current safe checkpoint and keep completed results…"
         )
-        QApplication.processEvents()
-        self.scan_all_button.setEnabled(True)
-        self.scanner_results = rank_market_categories(all_candidates)
+
+    def scan_all_fixtures(self):
+        """Run local-first scanning and optional shortlist enrichment off the GUI thread."""
+        if getattr(self, "_scanner_running", False):
+            return
+        if self.fixture_data_mode == "demo":
+            self.scanner_summary.setText(
+                "Demo fixtures are illustrative and are not scanned. Load real provider fixtures first."
+            )
+            return
+        # Scan every loaded scheduled fixture, independent of the table's search,
+        # competition and status filters. UI filters must never hide scan candidates.
+        fixtures = filter_fixtures(self.live_fixtures, status="Scheduled")
+        if not fixtures:
+            self.scanner_summary.setText("No scheduled fixtures are available in the loaded fixture set.")
+            return
+
+        mode = self.scanner_mode.currentData() if hasattr(self, "scanner_mode") else "intelligent"
+        shortlist_size = self.scanner_shortlist.currentData() if hasattr(self, "scanner_shortlist") else 20
+        try:
+            training_records = self.store.training_records()
+            calibration_profile = self.store.get_provider_cache("live_calibration_profile")
+            api_key = self.get_api_key()
+        except Exception as exc:
+            self.scanner_summary.setText(f"Could not prepare scanner inputs: {exc}")
+            return
+
+        self._scanner_running = True
+        self._scanner_cancel_requested = False
+        self.scan_all_button.setEnabled(False)
+        self.scanner_mode.setEnabled(False)
+        self.scanner_shortlist.setEnabled(False)
+        self.stop_scan_button.setEnabled(True)
+        self.stop_scan_button.setText("Stop Scan")
+        self.scanner_results = {}
+        self.scanner_summary.setText(
+            f"Starting a full scan of all {len(fixtures)} loaded scheduled fixtures in the background. "
+            "Stage 1 uses local history; Stage 2 enriches the selected shortlist."
+        )
+        self._scanner_worker = IntelligentScannerWorker(
+            fixtures=fixtures,
+            database_path=self.historical_db.path,
+            training_records=training_records,
+            calibration_profile=calibration_profile,
+            api_key=api_key,
+            mode=mode,
+            shortlist_size=int(shortlist_size or 20),
+            history_limit=int(self.recent_form_limit.currentData() or 5),
+        )
+        self._scanner_worker.progress.connect(self._on_scanner_progress)
+        self._scanner_worker.completed.connect(self._on_scanner_completed)
+        self._scanner_worker.failed.connect(self._on_scanner_failed)
+        self._scanner_worker.finished.connect(self._on_scanner_thread_finished)
+        self._scanner_worker.start()
+
+    def _scanner_candidates_from_results(self, results):
+        candidates = []
+        for result in results or []:
+            fixture = result.get("fixture") or {}
+            deep_status = result.get("deep_status")
+            for candidate in result.get("candidates") or []:
+                entry = dict(candidate)
+                entry["fixture"] = fixture
+                history_note = (
+                    f"Local history: {result.get('home_history', 0)} / "
+                    f"{result.get('away_history', 0)} recent matches."
+                )
+                details = [history_note]
+                if deep_status:
+                    details.append("Deep analysis: " + str(deep_status))
+                if entry.get("note"):
+                    details.append(str(entry["note"]))
+                entry["note"] = " ".join(details)
+                candidates.append(entry)
+        return candidates
+
+    def _publish_intelligent_scan_results(self, results, status, skipped=None, phase=None):
+        candidates = self._scanner_candidates_from_results(results)
+        self.scanner_results = rank_market_categories(candidates)
         self.scanner_category.blockSignals(True)
         self.scanner_category.clear()
-        for category in sorted(self.scanner_results):
+        categories = sorted(self.scanner_results)
+        for priority in ("ALL MARKET OPPORTUNITIES", "TOP PICKS — VALIDATED"):
+            if priority in categories:
+                categories.remove(priority)
+                categories.insert(0, priority)
+        for category in categories:
             self.scanner_category.addItem(category)
         self.scanner_category.blockSignals(False)
-        scanned = len(fixtures) - len(skipped)
-        self.scanner_summary.setText(
-            f"SCAN COMPLETE  •  {scanned}/{len(fixtures)} fixtures analysed  •  "
-            f"{len(all_candidates):,} market selections ranked  •  {len(skipped)} skipped. "
-            "Probabilities are estimates, not guarantees. Goal-line markets derived from expected goals are NOT CALIBRATED; corner markets appear only where local corner history supports them."
-        )
-        if skipped:
-            self.scanner_summary.setToolTip("\n".join(skipped))
-        else:
-            self.scanner_summary.setToolTip("All visible fixtures had sufficient local historical results.")
         self.render_scanner_category(self.scanner_category.currentText())
         self.live_content_splitter.setSizes([260, 75, 90, 390])
-        self.api_message.setText(
-            f"Automatic scan complete: {scanned} analysed, {len(skipped)} skipped. "
-            "This scan used local history only and made no API requests."
+        top_count = len(self.scanner_results.get("TOP PICKS — VALIDATED", []))
+        deep_count = sum(1 for item in (results or []) if item.get("deep_status"))
+        skipped_count = len(skipped or [])
+        phase_text = f" • {phase}" if phase else ""
+        self.scanner_summary.setText(
+            f"{status}{phase_text} • {len(results or [])} fixtures with usable local history • "
+            f"{len(candidates):,} market selections • {skipped_count} skipped • "
+            f"{deep_count} deep analyses completed • {top_count} validated Top Picks."
         )
+        self.scanner_summary.setToolTip("\\n".join(skipped or []) if skipped else
+            "Completed fixture results are retained in this session.")
+        self.api_message.setText(
+            f"{status}: local historical scan completed. Deep enrichment attempted for "
+            f"{deep_count} shortlisted fixtures; unavailable provider fields remain explicitly marked."
+        )
+
+    def _on_scanner_progress(self, payload):
+        if not isinstance(payload, dict):
+            return
+        phase = payload.get("phase", "SCANNING")
+        if phase == "FAST LOCAL SCAN":
+            results = payload.get("stage_one") or []
+            self._publish_intelligent_scan_results(
+                results, "SCANNING LOCAL HISTORY",
+                phase=f"{payload.get('completed', 0)}/{payload.get('total', 0)} "
+                      f"— {payload.get('fixture', '')}"
+            )
+        else:
+            results = payload.get("enriched") or payload.get("stage_one") or []
+            self._publish_intelligent_scan_results(
+                results, "DEEP ANALYSIS IN PROGRESS",
+                phase=f"{payload.get('completed', 0)}/{payload.get('total', 0)} "
+                      f"— {payload.get('fixture', '')}"
+            )
+
+    def _on_scanner_completed(self, payload):
+        results = payload.get("final_results") or []
+        skipped = payload.get("skipped") or []
+        status = "SCAN STOPPED — PARTIAL RESULTS" if payload.get("stopped") else "SCAN COMPLETE"
+        self._publish_intelligent_scan_results(results, status, skipped=skipped)
+        capture = self.prediction_tracker.capture_scan(results)
+        if hasattr(self, "tracker_table"):
+            self.refresh_prediction_tracker()
+        elapsed = float(payload.get("elapsed") or 0)
+        self.scanner_summary.setText(
+            self.scanner_summary.text()
+            + f" • Total time: {elapsed:.1f}s • Deep shortlist: {payload.get('deep_count', 0)}"
+        )
+        self.api_message.setText(
+            f"{status}: {len(results)} fixtures retained; {len(skipped)} skipped; "
+            f"{payload.get('deep_count', 0)} deep analyses attempted. "
+            "Missing injuries, lineups, referee or weather data is not treated as confirmation of availability."
+        )
+
+    def _on_scanner_failed(self, message):
+        self.scanner_summary.setText(f"SCANNER ERROR — {message}")
+        self.api_message.setText("The background scan stopped because of an error. Previously displayed results remain available.")
+
+    def _on_scanner_thread_finished(self):
+        self._scanner_running = False
+        self._scanner_cancel_requested = False
+        self.scan_all_button.setEnabled(True)
+        self.scanner_mode.setEnabled(True)
+        self.scanner_shortlist.setEnabled(True)
+        self.stop_scan_button.setEnabled(False)
+        self.stop_scan_button.setText("Stop Scan")
+        self._scanner_worker = None
 
     def render_scanner_category(self, category):
         if not hasattr(self, "scanner_table"):
             return
         rows = self.scanner_results.get(category, []) if category else []
+        self.scanner_table.clearSpans()
+        if category == "TOP PICKS — VALIDATED" and not rows:
+            self.scanner_table.setRowCount(1)
+            self.scanner_table.setItem(
+                0, 0,
+                QTableWidgetItem(
+                    "No validated picks yet. This shortlist requires a current calibration profile, "
+                    "at least 30 historical observations in the relevant confidence range, and probability of 60% or higher."
+                ),
+            )
+            self.scanner_table.setSpan(0, 0, 1, self.scanner_table.columnCount())
+            return
         self.scanner_table.setRowCount(len(rows))
         for row, item in enumerate(rows):
             fixture = item.get("fixture") or {}
@@ -2270,6 +2417,7 @@ class MainWindow(QMainWindow):
         home_id = (teams.get("home") or {}).get("id")
         away_id = (teams.get("away") or {}).get("id")
         match_date = (fixture.get("date") or "")[:10]
+        form_limit = int(self.recent_form_limit.currentData() or 5)
         notes = []
         quota_exhausted = False
 
@@ -2340,11 +2488,11 @@ class MainWindow(QMainWindow):
             for side, team_id, team_name in (("home", home_id, (teams.get("home") or {}).get("name", "")),
                                              ("away", away_id, (teams.get("away") or {}).get("name", ""))):
                 recent[side] = self.historical_db.team_recent_matches(
-                    team_id, match_date, limit=5
+                    team_id, match_date, limit=form_limit
                 )
                 if team_name:
                     imported = self.historical_db.team_recent_matches_by_name(
-                        team_name, match_date, limit=10, provider_team_id=team_id
+                        team_name, match_date, limit=form_limit, provider_team_id=team_id
                     )
                     combined = {((match.get("fixture") or {}).get("id")): match
                                 for match in recent[side]}
@@ -2354,12 +2502,12 @@ class MainWindow(QMainWindow):
                         combined.values(),
                         key=lambda match: (match.get("fixture") or {}).get("date", ""),
                         reverse=True,
-                    )[:10]
+                    )[:form_limit]
                 if not recent[side]:
                     recent[side] = optional_data(
-                        f"{side.title()} history", f"team_recent:{team_id}:{match_date}:5",
+                        f"{side.title()} history", f"team_recent:{team_id}:{match_date}:{form_limit}",
                         lambda tid=team_id: fetch_recent_team_fixtures(
-                            tid, api_key=key, last=5, before_date=match_date
+                            tid, api_key=key, last=form_limit, before_date=match_date
                         ),
                         7 * 24 * 60 * 60,
                     ) or []
@@ -2485,20 +2633,54 @@ class MainWindow(QMainWindow):
         home_name, away_name = home.get("name", "Home"), away.get("name", "Away")
         key = self.get_api_key()
         fixture_date = ((item.get("fixture") or {}).get("date") or "")[:10]
+        form_limit = 10 if automatic_scan else int(self.recent_form_limit.currentData() or 5)
+
+        def scan_cancelled():
+            if not automatic_scan:
+                return False
+            QApplication.processEvents()
+            return bool(getattr(self, "_scanner_cancel_requested", False))
+
+        if scan_cancelled():
+            return {"cancelled": True}
         self.api_message.setText(
             f"Checking local historical database for {home_name} and {away_name} first…"
         )
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            home_recent = self.historical_db.team_recent_matches(home_id, fixture_date, limit=5)
-            away_recent = self.historical_db.team_recent_matches(away_id, fixture_date, limit=5)
+            scan_context = getattr(self, "_scanner_context", None) if automatic_scan else None
+            def cached_history(cache_key, loader):
+                if scan_context is None:
+                    return loader()
+                cache = scan_context["history"]
+                if cache_key not in cache:
+                    started = time.perf_counter()
+                    cache[cache_key] = loader()
+                    scan_context["history_seconds"] += time.perf_counter() - started
+                return cache[cache_key]
+
+            home_recent = cached_history(
+                ("id", home_id, fixture_date) if home_id is not None else
+                ("name-id-fallback", self.historical_db._team_name_key(home_name), fixture_date),
+                lambda: self.historical_db.team_recent_matches(home_id, fixture_date, limit=form_limit),
+            )
+            away_recent = cached_history(
+                ("id", away_id, fixture_date) if away_id is not None else
+                ("name-id-fallback", self.historical_db._team_name_key(away_name), fixture_date),
+                lambda: self.historical_db.team_recent_matches(away_id, fixture_date, limit=form_limit),
+            )
+            if scan_cancelled():
+                return {"cancelled": True}
             # Merge name-matched CSV history even when API-ID history exists, so
             # imported statistics (especially corners) remain available to models.
             for team_name, team_id, history in (
                 (home_name, home_id, home_recent), (away_name, away_id, away_recent)
             ):
-                imported = self.historical_db.team_recent_matches_by_name(
-                    team_name, fixture_date, limit=10, provider_team_id=team_id
+                imported = cached_history(
+                    ("name", self.historical_db._team_name_key(team_name), fixture_date, team_id),
+                    lambda: self.historical_db.team_recent_matches_by_name(
+                        team_name, fixture_date, limit=form_limit, provider_team_id=team_id
+                    ),
                 )
                 combined = {(match.get("fixture") or {}).get("id"): match for match in history}
                 for match in imported:
@@ -2507,11 +2689,13 @@ class MainWindow(QMainWindow):
                     combined.values(),
                     key=lambda match: (match.get("fixture") or {}).get("date", ""),
                     reverse=True,
-                )[:10]
+                )[:form_limit]
                 if team_name == home_name:
                     home_recent = merged
                 else:
                     away_recent = merged
+            if scan_cancelled():
+                return {"cancelled": True}
             if not home_recent or not away_recent:
                 if automatic_scan:
                     raise ApiFootballError("Insufficient local history for one or both teams; import more completed matches in Data Library.")
@@ -2521,44 +2705,51 @@ class MainWindow(QMainWindow):
                     )
                 if not home_recent:
                     home_recent = self.cached_provider_data(
-                        f"team_recent:{home_id}:{fixture_date}:5",
+                        f"team_recent:{home_id}:{fixture_date}:{form_limit}",
                         lambda: fetch_recent_team_fixtures(
-                            home_id, api_key=key, last=5, before_date=fixture_date
+                            home_id, api_key=key, last=form_limit, before_date=fixture_date
                         ),
                         7 * 24 * 60 * 60,
                     )
                     self.historical_db.upsert_fixtures(home_recent)
                 if not away_recent:
                     away_recent = self.cached_provider_data(
-                        f"team_recent:{away_id}:{fixture_date}:5",
+                        f"team_recent:{away_id}:{fixture_date}:{form_limit}",
                         lambda: fetch_recent_team_fixtures(
-                            away_id, api_key=key, last=5, before_date=fixture_date
+                            away_id, api_key=key, last=form_limit, before_date=fixture_date
                         ),
                         7 * 24 * 60 * 60,
                     )
                     self.historical_db.upsert_fixtures(away_recent)
-            h2h_matches = self.historical_db.head_to_head_matches(
-                home_id, away_id, fixture_date, limit=10
-            )
-            if not h2h_matches:
-                h2h_matches = self.historical_db.head_to_head_matches_by_name(
-                    home_name, away_name, fixture_date, limit=10
-                )
-            if not h2h_matches and key and not automatic_scan:
-                try:
-                    h2h_matches = self.cached_provider_data(
-                        f"h2h:{home_id}:{away_id}:{fixture_date}:10",
-                        lambda: fetch_head_to_head_fixtures(
-                            home_id, away_id, api_key=key, before_date=fixture_date, limit=10
-                        ),
-                        7 * 24 * 60 * 60,
-                    )
-                    self.historical_db.upsert_fixtures(h2h_matches)
-                    h2h_error = None
-                except ApiFootballError as h2h_exc:
-                    h2h_error = str(h2h_exc)
-            else:
+            # Head-to-head history is not used by the automatic market scanner.
+            # Skip these extra lookups during scans; they can otherwise trigger a
+            # full normalized-name fallback across the historical database.
+            if automatic_scan:
+                h2h_matches = []
                 h2h_error = None
+            else:
+                h2h_matches = self.historical_db.head_to_head_matches(
+                    home_id, away_id, fixture_date, limit=10
+                )
+                if not h2h_matches:
+                    h2h_matches = self.historical_db.head_to_head_matches_by_name(
+                        home_name, away_name, fixture_date, limit=10
+                    )
+                if not h2h_matches and key:
+                    try:
+                        h2h_matches = self.cached_provider_data(
+                            f"h2h:{home_id}:{away_id}:{fixture_date}:10",
+                            lambda: fetch_head_to_head_fixtures(
+                                home_id, away_id, api_key=key, before_date=fixture_date, limit=10
+                            ),
+                            7 * 24 * 60 * 60,
+                        )
+                        self.historical_db.upsert_fixtures(h2h_matches)
+                        h2h_error = None
+                    except ApiFootballError as h2h_exc:
+                        h2h_error = str(h2h_exc)
+                else:
+                    h2h_error = None
         except ApiFootballError as exc:
             self.api_message.setText(str(exc))
             if automatic_scan:
@@ -2585,6 +2776,8 @@ class MainWindow(QMainWindow):
 
         home_used = matches_used(home_recent, home_id)
         away_used = matches_used(away_recent, away_id)
+        if scan_cancelled():
+            return {"cancelled": True}
         selected_fixture_data = item.get("fixture") or {}
         selected_fixture_id = selected_fixture_data.get("id")
         corner_averages = self.store.get_provider_cache(
@@ -2621,6 +2814,8 @@ class MainWindow(QMainWindow):
 
         hr = team_profile(home_used, home_id)
         ar = team_profile(away_used, away_id)
+        if scan_cancelled():
+            return {"cancelled": True}
         if not hr or not ar:
             message = "Not enough completed local results with scores for both teams."
             self.api_message.setText(message)
@@ -2636,7 +2831,15 @@ class MainWindow(QMainWindow):
         home_xg_seed = max(0.05, (hr["scored_avg"] + ar["conceded_avg"]) / 2)
         away_xg_seed = max(0.05, (ar["scored_avg"] + hr["conceded_avg"]) / 2)
         model_features = build_model_features(hr, ar, home_xg_seed, away_xg_seed)
-        local_ml = train_outcome_model(self.store.training_records())
+        if automatic_scan and scan_context is not None:
+            if not scan_context["training_loaded"]:
+                training_started = time.perf_counter()
+                scan_context["training_model"] = train_outcome_model(self.store.training_records())
+                scan_context["training_seconds"] += time.perf_counter() - training_started
+                scan_context["training_loaded"] = True
+            local_ml = scan_context["training_model"]
+        else:
+            local_ml = train_outcome_model(self.store.training_records())
         ml_probabilities = predict_outcome(local_ml, model_features) if local_ml else None
         injuries_data = self.store.get_provider_cache(f"injuries:{selected_fixture_id}", 30 * 60)
         lineups_data = self.store.get_provider_cache(f"lineups:{selected_fixture_id}", 10 * 60)
@@ -2754,6 +2957,21 @@ class MainWindow(QMainWindow):
             )
             return
 
+        tracker_candidates = build_market_candidates(
+            home_name, away_name, markets, home_xg, away_xg
+        )
+        self.prediction_tracker.capture_scan([{
+            "fixture": fixture_info,
+            "candidates": tracker_candidates,
+            "markets": markets,
+            "home_xg": home_xg,
+            "away_xg": away_xg,
+            "home_history": len(home_used),
+            "away_history": len(away_used),
+        }])
+        if hasattr(self, "tracker_table"):
+            self.refresh_prediction_tracker()
+
         scores = ", ".join(f"{h}-{a} ({p:.1%})" for h, a, p in markets["top_scores"][:5])
         explanation = build_analysis_explanation(
             home_name, away_name, hr, ar, home_xg, away_xg, markets
@@ -2776,7 +2994,7 @@ class MainWindow(QMainWindow):
             f"{(item.get('league') or {}).get('name', 'Unknown')} • Analysis #{prediction_id}\\n\\n"
             "MODEL INPUTS\\n"
             f"Historical completed matches: {home_name} {hr['played']}, {away_name} {ar['played']} "
-            "(up to 5 per team; local historical database is preferred when available)\\n"
+            "(selected latest completed matches before kickoff; local historical database is preferred)\\n"
             f"Estimated goals (xG-style baseline): {home_name} {home_xg:.2f} — "
             f"{away_xg:.2f} {away_name}\\n\\n"
             "PREDICTED MARKETS\\n"
@@ -3058,7 +3276,7 @@ class MainWindow(QMainWindow):
 
             coverage = QLabel(
                 "DATA COVERAGE  •  Goal probabilities combine the Poisson goal distribution "
-                "and recent-form strength using up to five accessible completed matches per team. "
+                "and recent-form strength using the selected latest completed matches before kickoff. "
                 "Corner markets are calculated separately when historical corner statistics are available. "
                 "Injuries, lineups, referee and weather are shown as context and influence coverage confidence; "
                 "their numerical effects are not weighted until validated through backtesting."
@@ -3879,6 +4097,174 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 self.model_performance_table.setItem(row, column, QTableWidgetItem(str(value)))
+
+
+    def prediction_tracker_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        heading = QLabel("PREDICTION TRACKER & RESULTS CENTRE")
+        heading.setStyleSheet("font-size:16px;font-weight:800;color:#168BFF")
+        layout.addWidget(heading)
+        self.tracker_summary = QLabel("Every individual market generated by a completed real-fixture scan is saved here.")
+        self.tracker_summary.setWordWrap(True)
+        self.tracker_summary.setStyleSheet("color:#AFC3DF;padding:8px;background:#111D30;border:1px solid #26364D;border-radius:6px")
+        layout.addWidget(self.tracker_summary)
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Status:"))
+        self.tracker_status_filter = QComboBox()
+        self.tracker_status_filter.addItems(["All", "PENDING", "WON", "LOST", "VOID"])
+        self.tracker_status_filter.currentTextChanged.connect(self.refresh_prediction_tracker)
+        controls.addWidget(self.tracker_status_filter)
+        controls.addWidget(QLabel("Market:"))
+        self.tracker_market_filter = QComboBox()
+        self.tracker_market_filter.addItem("All")
+        self.tracker_market_filter.currentTextChanged.connect(self.refresh_prediction_tracker)
+        controls.addWidget(self.tracker_market_filter, 1)
+        self.tracker_check_button = QPushButton("Check Results from API")
+        self.tracker_check_button.clicked.connect(self.check_prediction_tracker_results)
+        controls.addWidget(self.tracker_check_button)
+        layout.addLayout(controls)
+        filters = QHBoxLayout()
+        filters.addWidget(QLabel("Date range:"))
+        self.tracker_period_filter = QComboBox()
+        self.tracker_period_filter.addItems(["All time", "Today", "Yesterday", "Last 7 days", "Last 30 days"])
+        self.tracker_period_filter.currentTextChanged.connect(self.refresh_prediction_tracker)
+        filters.addWidget(self.tracker_period_filter)
+        self.tracker_search = QLineEdit()
+        self.tracker_search.setPlaceholderText("Search team, competition or selection…")
+        self.tracker_search.textChanged.connect(self.refresh_prediction_tracker)
+        filters.addWidget(self.tracker_search, 2)
+        filters.addWidget(QLabel("Minimum probability:"))
+        self.tracker_min_probability = QSpinBox()
+        self.tracker_min_probability.setRange(0, 100)
+        self.tracker_min_probability.setSuffix("%")
+        self.tracker_min_probability.valueChanged.connect(self.refresh_prediction_tracker)
+        filters.addWidget(self.tracker_min_probability)
+        layout.addLayout(filters)
+        self.tracker_table = QTableWidget(0, 9)
+        self.tracker_table.setHorizontalHeaderLabels(["Saved", "Kickoff", "Competition", "Fixture", "Market", "Selection", "Probability", "Reliability", "Result"])
+        self.tracker_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tracker_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.tracker_table.setAlternatingRowColors(True)
+        self.tracker_table.verticalHeader().setVisible(False)
+        self.tracker_table.setMinimumHeight(360)
+        self.tracker_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.tracker_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.tracker_table.horizontalHeader().setStretchLastSection(True)
+        enable_table_copy(self.tracker_table)
+        layout.addWidget(self.tracker_table, 1)
+        self.refresh_prediction_tracker()
+        return page
+
+    def refresh_prediction_tracker(self, *_):
+        if not hasattr(self, "tracker_table"):
+            return
+        summary = self.prediction_tracker.summary()
+        accuracy = "—" if summary["accuracy"] is None else "{:.1%}".format(summary["accuracy"])
+        self.tracker_summary.setText(
+            "Saved market predictions: {total:,} • Pending: {pending:,} • WON: {won:,} • LOST: {lost:,} • VOID: {void:,} • Settled-selection accuracy: {accuracy}. Pending and void records are excluded.".format(
+                total=summary["total"], pending=summary["pending"], won=summary["won"],
+                lost=summary["lost"], void=summary["void"], accuracy=accuracy
+            )
+        )
+        selected_market = self.tracker_market_filter.currentText() if self.tracker_market_filter.count() else "All"
+        categories = sorted({row["market_category"] for row in self.prediction_tracker.records(limit=10000)})
+        self.tracker_market_filter.blockSignals(True)
+        self.tracker_market_filter.clear()
+        self.tracker_market_filter.addItem("All")
+        self.tracker_market_filter.addItems(categories)
+        self.tracker_market_filter.setCurrentIndex(max(0, self.tracker_market_filter.findText(selected_market)))
+        self.tracker_market_filter.blockSignals(False)
+        status = self.tracker_status_filter.currentText() if hasattr(self, "tracker_status_filter") else "All"
+        market = self.tracker_market_filter.currentText() if hasattr(self, "tracker_market_filter") else "All"
+        period = self.tracker_period_filter.currentText() if hasattr(self, "tracker_period_filter") else "All time"
+        now_local = datetime.now().astimezone()
+        today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        created_after = created_before = None
+        if period == "Today":
+            created_after = today_start.astimezone(timezone.utc).isoformat()
+        elif period == "Yesterday":
+            created_after = (today_start - timedelta(days=1)).astimezone(timezone.utc).isoformat()
+            created_before = today_start.astimezone(timezone.utc).isoformat()
+        elif period == "Last 7 days":
+            created_after = (now_local - timedelta(days=7)).astimezone(timezone.utc).isoformat()
+        elif period == "Last 30 days":
+            created_after = (now_local - timedelta(days=30)).astimezone(timezone.utc).isoformat()
+        search = self.tracker_search.text().strip() if hasattr(self, "tracker_search") else ""
+        minimum_probability = (self.tracker_min_probability.value() / 100.0) if hasattr(self, "tracker_min_probability") else 0.0
+        rows = self.prediction_tracker.records(
+            status=status, market=market, limit=2000, search=search,
+            min_probability=minimum_probability, created_after=created_after,
+            created_before=created_before,
+        )
+        self.tracker_table.setRowCount(len(rows))
+        for row_index, record in enumerate(rows):
+            saved = (record.get("created_at_utc") or "")[:16].replace("T", " ")
+            kickoff = str(record.get("kickoff_utc") or "")[:16].replace("T", " ")
+            values = [
+                saved, kickoff, record.get("competition", ""),
+                "{} vs {}".format(record.get("home_team", ""), record.get("away_team", "")),
+                record.get("market_category", ""), record.get("selection", ""),
+                "{:.1%}".format(float(record.get("probability") or 0)),
+                record.get("reliability", ""),
+                record.get("result_status", "PENDING") + (" • " + str(record.get("actual_value")) if record.get("actual_value") is not None else ""),
+            ]
+            for column, value in enumerate(values):
+                self.tracker_table.setItem(row_index, column, QTableWidgetItem(str(value)))
+        self.tracker_table.resizeColumnsToContents()
+        self.tracker_table.setColumnWidth(3, 230)
+        self.tracker_table.setColumnWidth(8, 150)
+
+    def check_prediction_tracker_results(self):
+        key = self.get_api_key()
+        if not key:
+            QMessageBox.information(self, "API key needed", "Set your API-Football key before checking tracker results.")
+            return
+        pending = self.prediction_tracker.pending_fixtures()
+        if not pending:
+            self.tracker_summary.setText("No pending market predictions need result checks.")
+            return
+        checked = settled = 0
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.tracker_check_button.setEnabled(False)
+        try:
+            for item in pending:
+                fixture_id = int(item["fixture_id"])
+                match = fetch_fixture_by_id(fixture_id, api_key=key)
+                checked += 1
+                if not match:
+                    continue
+                fixture = match.get("fixture") or {}
+                status = (fixture.get("status") or {}).get("short")
+                goals = match.get("goals") or {}
+                home_goals, away_goals = goals.get("home"), goals.get("away")
+                home_corners = away_corners = None
+                if item.get("needs_corners") and status in {"FT", "AET", "PEN"}:
+                    try:
+                        stats = fetch_fixture_corner_statistics(fixture_id, api_key=key)
+                        teams = match.get("teams") or {}
+                        home_id = (teams.get("home") or {}).get("id")
+                        away_id = (teams.get("away") or {}).get("id")
+                        home_corners = stats.get(str(home_id), stats.get(home_id))
+                        away_corners = stats.get(str(away_id), stats.get(away_id))
+                    except (ApiFootballError, AttributeError, TypeError):
+                        pass
+                settled += self.prediction_tracker.settle_fixture(
+                    fixture_id, status, home_goals, away_goals,
+                    home_corners=home_corners, away_corners=away_corners,
+                    result_payload=match,
+                )
+        except ApiFootballError as exc:
+            self.tracker_summary.setText("Result check stopped: " + str(exc))
+            QMessageBox.warning(self, "Tracker result check", str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.tracker_check_button.setEnabled(True)
+            self.update_api_status()
+        self.refresh_prediction_tracker()
+        self.tracker_summary.setText(
+            self.tracker_summary.text() + " • Checked {} fixtures; settled {} market selections. Markets missing required statistics remain Pending.".format(checked, settled)
+        )
 
     def refresh_history(self):
         if not hasattr(self, "table"): return
