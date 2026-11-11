@@ -64,5 +64,18 @@ class PredictionTrackerTests(unittest.TestCase):
         self.assertEqual(self.tracker.capture_scan(scan)["markets"], 0)
 
 
+    def test_records_support_search_probability_and_created_time_filters(self):
+        self.tracker.capture_scan(self._scan())
+        all_rows = self.tracker.records()
+        self.assertTrue(all(row.get("created_at_utc") for row in all_rows))
+        high_probability = self.tracker.records(min_probability=.75)
+        self.assertEqual([row["selection"] for row in high_probability], ["Over 1.5"])
+        searched = self.tracker.records(search="Home")
+        self.assertEqual(len(searched), 4)
+        future = self.tracker.records(created_after="2099-01-01T00:00:00+00:00")
+        self.assertEqual(future, [])
+
+
+
 if __name__ == "__main__":
     unittest.main()
