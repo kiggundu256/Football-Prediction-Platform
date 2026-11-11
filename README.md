@@ -23,6 +23,9 @@ A local-first Windows football analytics and prediction workspace built with Pyt
 - Player Intelligence workspace with timestamped API-Football injury/lineup snapshots, completed-match player appearances and performance comparisons.
 - Player availability comparisons distinguish confirmed Missing Fixture reports from unknown absences; missing injury feeds are never treated as proof of fitness.
 - Prediction settlement and performance tracking by market, day and model version.
+- Two-stage intelligent fixture scanning: fast local assessment across all loaded fixtures, ranked cross-market opportunities, and optional deep analysis of the strongest 5/10/15/20-fixture shortlist.
+- A configurable latest-5/latest-10 completed-match form window, selected strictly before each fixture date and displayed in the saved analysis report.
+- Prediction Tracker & Results Centre stores each generated market selection as an immutable per-scan snapshot, filters by date/status/market/search/probability, and reconciles results independently by market. Missing corner statistics remain pending; void fixtures are marked VOID.
 - Probability-quality metrics: multiclass Brier score and log loss.
 - SQLite migrations preserve existing prediction history and the historical archive shares the same app-private database file.
 
