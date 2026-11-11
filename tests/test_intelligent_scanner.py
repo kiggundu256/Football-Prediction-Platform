@@ -134,5 +134,35 @@ class IntelligentScannerTests(unittest.TestCase):
             self.assertEqual(len(emitted[-1]["final_results"]), 3)
 
 
+    def test_recent_form_limit_selects_latest_five_or_ten_without_duplicates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            database = HistoricalDatabase(Path(folder) / "history.db")
+            fixtures = []
+            for index in range(1, 13):
+                day = "2024-01-{:02d}".format(index)
+                fixtures.append({
+                    "fixture": {"id": index, "date": day + "T15:00:00+00:00",
+                                "status": {"short": "FT"}},
+                    "league": {"id": 1, "name": "Test League", "season": 2024},
+                    "teams": {"home": {"id": 1, "name": "Home"},
+                              "away": {"id": index + 100, "name": "Opponent {}".format(index)}},
+                    "goals": {"home": index % 3, "away": 1},
+                })
+            database.upsert_fixtures(fixtures)
+            for limit, expected in ((5, [12, 11, 10, 9, 8]), (10, list(range(12, 2, -1)))):
+                worker = IntelligentScannerWorker(
+                    [], database.path, [], None, mode="fast", history_limit=limit
+                )
+                worker._history_cache = {}
+                history = worker._load_team_history(
+                    database, {"id": 1, "name": "Home"}, "2025-01-01", worker._history_cache
+                )
+                ids = [(match.get("fixture") or {}).get("id") for match in history]
+                self.assertEqual(ids, expected)
+                self.assertEqual(len(ids), len(set(ids)))
+                self.assertTrue(all((match.get("fixture") or {}).get("date", "")[:10] < "2025-01-01" for match in history))
+
+
+
 if __name__ == "__main__":
     unittest.main()
