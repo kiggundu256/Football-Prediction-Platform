@@ -243,16 +243,29 @@ class PredictionTracker:
                 FROM market_predictions WHERE result_status='PENDING'
                 GROUP BY fixture_id ORDER BY fixture_id""").fetchall()]
 
-    def records(self, status="All", market="All", limit=2000):
+    def records(self, status="All", market="All", limit=2000, search="",
+                min_probability=0.0, created_after=None, created_before=None):
         clauses, params = [], []
         if status and status != "All":
-            clauses.append("result_status=?"); params.append(status.upper())
+            clauses.append("p.result_status=?"); params.append(status.upper())
         if market and market != "All":
-            clauses.append("market_category=?"); params.append(market)
+            clauses.append("p.market_category=?"); params.append(market)
+        if search:
+            clauses.append("(p.competition LIKE ? OR p.home_team LIKE ? OR p.away_team LIKE ? OR p.selection LIKE ?)")
+            pattern = "%" + str(search).strip() + "%"
+            params.extend([pattern] * 4)
+        if min_probability:
+            clauses.append("p.probability>=?"); params.append(float(min_probability))
+        if created_after:
+            clauses.append("b.created_at_utc>=?"); params.append(created_after)
+        if created_before:
+            clauses.append("b.created_at_utc<?"); params.append(created_before)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         with self.connect() as db:
             return [dict(row) for row in db.execute(
-                "SELECT * FROM market_predictions" + where + " ORDER BY id DESC LIMIT ?",
+                "SELECT p.*,b.created_at_utc FROM market_predictions p "
+                "JOIN prediction_batches b ON b.id=p.batch_id" + where +
+                " ORDER BY p.id DESC LIMIT ?",
                 params + [int(limit)]
             ).fetchall()]
 
