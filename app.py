@@ -1665,6 +1665,12 @@ class MainWindow(QMainWindow):
         self.analyze_fixture_button = QPushButton("Analyze Selected Match")
         self.analyze_fixture_button.clicked.connect(self.analyze_selected_fixture)
         controls.addWidget(self.analyze_fixture_button)
+        controls.addWidget(QLabel("Recent form:"))
+        self.recent_form_limit = QComboBox()
+        self.recent_form_limit.addItem("Last 5 matches", 5)
+        self.recent_form_limit.addItem("Last 10 matches", 10)
+        self.recent_form_limit.setToolTip("Use the latest completed matches strictly before the selected fixture kickoff.")
+        controls.addWidget(self.recent_form_limit)
         controls.addStretch()
         box.addLayout(controls)
 
@@ -1893,6 +1899,7 @@ class MainWindow(QMainWindow):
             api_key=api_key,
             mode=mode,
             shortlist_size=int(shortlist_size or 20),
+            history_limit=int(self.recent_form_limit.currentData() or 5),
         )
         self._scanner_worker.progress.connect(self._on_scanner_progress)
         self._scanner_worker.completed.connect(self._on_scanner_completed)
@@ -2408,6 +2415,7 @@ class MainWindow(QMainWindow):
         home_id = (teams.get("home") or {}).get("id")
         away_id = (teams.get("away") or {}).get("id")
         match_date = (fixture.get("date") or "")[:10]
+        form_limit = int(self.recent_form_limit.currentData() or 5)
         notes = []
         quota_exhausted = False
 
@@ -2478,11 +2486,11 @@ class MainWindow(QMainWindow):
             for side, team_id, team_name in (("home", home_id, (teams.get("home") or {}).get("name", "")),
                                              ("away", away_id, (teams.get("away") or {}).get("name", ""))):
                 recent[side] = self.historical_db.team_recent_matches(
-                    team_id, match_date, limit=5
+                    team_id, match_date, limit=form_limit
                 )
                 if team_name:
                     imported = self.historical_db.team_recent_matches_by_name(
-                        team_name, match_date, limit=10, provider_team_id=team_id
+                        team_name, match_date, limit=form_limit, provider_team_id=team_id
                     )
                     combined = {((match.get("fixture") or {}).get("id")): match
                                 for match in recent[side]}
@@ -2492,12 +2500,12 @@ class MainWindow(QMainWindow):
                         combined.values(),
                         key=lambda match: (match.get("fixture") or {}).get("date", ""),
                         reverse=True,
-                    )[:10]
+                    )[:form_limit]
                 if not recent[side]:
                     recent[side] = optional_data(
-                        f"{side.title()} history", f"team_recent:{team_id}:{match_date}:5",
+                        f"{side.title()} history", f"team_recent:{team_id}:{match_date}:{form_limit}",
                         lambda tid=team_id: fetch_recent_team_fixtures(
-                            tid, api_key=key, last=5, before_date=match_date
+                            tid, api_key=key, last=form_limit, before_date=match_date
                         ),
                         7 * 24 * 60 * 60,
                     ) or []
@@ -2623,6 +2631,7 @@ class MainWindow(QMainWindow):
         home_name, away_name = home.get("name", "Home"), away.get("name", "Away")
         key = self.get_api_key()
         fixture_date = ((item.get("fixture") or {}).get("date") or "")[:10]
+        form_limit = 10 if automatic_scan else int(self.recent_form_limit.currentData() or 5)
 
         def scan_cancelled():
             if not automatic_scan:
@@ -2651,12 +2660,12 @@ class MainWindow(QMainWindow):
             home_recent = cached_history(
                 ("id", home_id, fixture_date) if home_id is not None else
                 ("name-id-fallback", self.historical_db._team_name_key(home_name), fixture_date),
-                lambda: self.historical_db.team_recent_matches(home_id, fixture_date, limit=5),
+                lambda: self.historical_db.team_recent_matches(home_id, fixture_date, limit=form_limit),
             )
             away_recent = cached_history(
                 ("id", away_id, fixture_date) if away_id is not None else
                 ("name-id-fallback", self.historical_db._team_name_key(away_name), fixture_date),
-                lambda: self.historical_db.team_recent_matches(away_id, fixture_date, limit=5),
+                lambda: self.historical_db.team_recent_matches(away_id, fixture_date, limit=form_limit),
             )
             if scan_cancelled():
                 return {"cancelled": True}
@@ -2668,7 +2677,7 @@ class MainWindow(QMainWindow):
                 imported = cached_history(
                     ("name", self.historical_db._team_name_key(team_name), fixture_date, team_id),
                     lambda: self.historical_db.team_recent_matches_by_name(
-                        team_name, fixture_date, limit=10, provider_team_id=team_id
+                        team_name, fixture_date, limit=form_limit, provider_team_id=team_id
                     ),
                 )
                 combined = {(match.get("fixture") or {}).get("id"): match for match in history}
@@ -2678,7 +2687,7 @@ class MainWindow(QMainWindow):
                     combined.values(),
                     key=lambda match: (match.get("fixture") or {}).get("date", ""),
                     reverse=True,
-                )[:10]
+                )[:form_limit]
                 if team_name == home_name:
                     home_recent = merged
                 else:
@@ -2694,18 +2703,18 @@ class MainWindow(QMainWindow):
                     )
                 if not home_recent:
                     home_recent = self.cached_provider_data(
-                        f"team_recent:{home_id}:{fixture_date}:5",
+                        f"team_recent:{home_id}:{fixture_date}:{form_limit}",
                         lambda: fetch_recent_team_fixtures(
-                            home_id, api_key=key, last=5, before_date=fixture_date
+                            home_id, api_key=key, last=form_limit, before_date=fixture_date
                         ),
                         7 * 24 * 60 * 60,
                     )
                     self.historical_db.upsert_fixtures(home_recent)
                 if not away_recent:
                     away_recent = self.cached_provider_data(
-                        f"team_recent:{away_id}:{fixture_date}:5",
+                        f"team_recent:{away_id}:{fixture_date}:{form_limit}",
                         lambda: fetch_recent_team_fixtures(
-                            away_id, api_key=key, last=5, before_date=fixture_date
+                            away_id, api_key=key, last=form_limit, before_date=fixture_date
                         ),
                         7 * 24 * 60 * 60,
                     )
@@ -3250,7 +3259,7 @@ class MainWindow(QMainWindow):
 
             coverage = QLabel(
                 "DATA COVERAGE  •  Goal probabilities combine the Poisson goal distribution "
-                "and recent-form strength using up to five accessible completed matches per team. "
+                "and recent-form strength using the selected latest completed matches before kickoff. "
                 "Corner markets are calculated separately when historical corner statistics are available. "
                 "Injuries, lineups, referee and weather are shown as context and influence coverage confidence; "
                 "their numerical effects are not weighted until validated through backtesting."
