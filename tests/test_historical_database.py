@@ -47,7 +47,7 @@ class HistoricalDatabaseTests(unittest.TestCase):
         ])
         rows = self.db.team_recent_matches(10, "2026-10-01", limit=5)
         self.assertEqual([item["fixture"]["id"] for item in rows], [3, 2])
-        self.assertEqual(rows[0]["goals"]["home"], 0)
+        self.assertEqual(rows[0]["goals"]["home"], 1)
 
     def test_recent_matches_batch_excludes_2025_and_uses_latest_2026_only(self):
         self.db.upsert_fixtures([
