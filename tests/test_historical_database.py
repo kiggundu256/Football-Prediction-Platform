@@ -41,13 +41,29 @@ class HistoricalDatabaseTests(unittest.TestCase):
     def test_recent_matches_are_local_chronological_and_cut_off(self):
         self.db.upsert_fixtures([
             fixture(1, "2025-08-10", 10, 20, 2, 1),
-            fixture(2, "2025-08-17", 20, 10, 0, 1),
-            fixture(3, "2025-09-01", 10, 30, 1, 1),
-            fixture(4, "2025-09-10", 10, 20, 3, 0, "NS"),
+            fixture(2, "2026-08-17", 20, 10, 0, 1),
+            fixture(3, "2026-09-01", 10, 30, 1, 1),
+            fixture(4, "2026-09-10", 10, 20, 3, 0, "NS"),
         ])
-        rows = self.db.team_recent_matches(10, "2025-09-01", limit=5)
-        self.assertEqual([item["fixture"]["id"] for item in rows], [2, 1])
+        rows = self.db.team_recent_matches(10, "2026-10-01", limit=5)
+        self.assertEqual([item["fixture"]["id"] for item in rows], [3, 2])
         self.assertEqual(rows[0]["goals"]["home"], 0)
+
+    def test_recent_matches_batch_excludes_2025_and_uses_latest_2026_only(self):
+        self.db.upsert_fixtures([
+            fixture(11, "2025-12-20", 10, 20, 1, 0),
+            fixture(12, "2026-01-05", 20, 10, 0, 0),
+            fixture(13, "2026-10-20", 10, 30, 2, 1),
+            fixture(14, "2026-11-01", 30, 10, 1, 2),
+        ])
+        rows = self.db.team_recent_matches_batch([
+            {"key": "team-10", "team_id": 10, "team_name": "Team 10",
+             "before_date": "2026-11-12"},
+        ], limit=2)
+        self.assertEqual(
+            [item["fixture"]["id"] for item in rows["team-10"]],
+            [14, 13],
+        )
 
     def test_head_to_head_includes_both_home_away_orders(self):
         self.db.upsert_fixtures([
@@ -99,10 +115,10 @@ class HistoricalDatabaseTests(unittest.TestCase):
         importer = HistoricalCsvImporter(self.db.path)
         importer.import_file(path, {
             "name": "Premier League", "country": "England", "league_id": -39
-        }, 2025)
+        }, 2026)
 
         recent = self.db.team_recent_matches_by_name(
-            "Arsenal", "2025-09-01", limit=5, provider_team_id=42
+            "Arsenal", "2026-09-01", limit=5, provider_team_id=42
         )
         self.assertEqual(len(recent), 2)
         self.assertEqual(recent[0]["teams"]["away"]["id"], 42)
