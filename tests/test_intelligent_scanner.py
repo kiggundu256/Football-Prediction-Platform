@@ -48,28 +48,28 @@ class IntelligentScannerTests(unittest.TestCase):
             database = HistoricalDatabase(Path(folder) / "history.db")
             fixtures = [
                 {
-                    "fixture": {"id": 1, "date": "2023-12-01T15:00:00+00:00", "status": {"short": "FT"}},
-                    "league": {"id": 1, "name": "Test League", "season": 2023},
+                    "fixture": {"id": 1, "date": "2026-01-01T15:00:00+00:00", "status": {"short": "FT"}},
+                    "league": {"id": 1, "name": "Test League", "season": 2026},
                     "teams": {"home": {"id": 1, "name": "Home"}, "away": {"id": 2, "name": "Other"}},
                     "goals": {"home": 2, "away": 1},
                 },
                 {
-                    "fixture": {"id": 2, "date": "2024-02-01T15:00:00+00:00", "status": {"short": "FT"}},
-                    "league": {"id": 1, "name": "Test League", "season": 2024},
+                    "fixture": {"id": 2, "date": "2026-02-01T15:00:00+00:00", "status": {"short": "FT"}},
+                    "league": {"id": 1, "name": "Test League", "season": 2026},
                     "teams": {"home": {"id": 1, "name": "Home"}, "away": {"id": 2, "name": "Other"}},
                     "goals": {"home": 0, "away": 1},
                 },
             ]
             database.upsert_fixtures(fixtures)
             scan_fixture = {
-                "fixture": {"date": "2024-01-01T15:00:00+00:00"},
+                "fixture": {"date": "2026-02-01T15:00:00+00:00"},
                 "teams": {"home": {"id": 1, "name": "Home"}, "away": {"id": 2, "name": "Other"}},
             }
             worker = IntelligentScannerWorker([scan_fixture], database.path, [], None, mode="fast")
             worker._history_cache = {}
             worker._prefetch_histories(database)
             history = worker._load_team_history(
-                database, {"id": 1, "name": "Home"}, "2024-01-01", worker._history_cache
+                database, {"id": 1, "name": "Home"}, "2026-02-01", worker._history_cache
             )
             self.assertEqual([item["fixture"]["id"] for item in history], [1])
 
@@ -139,28 +139,28 @@ class IntelligentScannerTests(unittest.TestCase):
             database = HistoricalDatabase(Path(folder) / "history.db")
             fixtures = []
             for index in range(1, 13):
-                day = "2024-01-{:02d}".format(index)
+                day = "2026-01-{:02d}".format(index)
                 fixtures.append({
                     "fixture": {"id": index, "date": day + "T15:00:00+00:00",
                                 "status": {"short": "FT"}},
-                    "league": {"id": 1, "name": "Test League", "season": 2024},
+                    "league": {"id": 1, "name": "Test League", "season": 2026},
                     "teams": {"home": {"id": 1, "name": "Home"},
                               "away": {"id": index + 100, "name": "Opponent {}".format(index)}},
                     "goals": {"home": index % 3, "away": 1},
                 })
             fixtures.extend([
                 {
-                    "fixture": {"id": 13, "date": "2024-01-12T19:00:00+00:00",
+                    "fixture": {"id": 13, "date": "2026-01-12T19:00:00+00:00",
                                 "status": {"short": "FT"}},
-                    "league": {"id": 1, "name": "Test League", "season": 2024},
+                    "league": {"id": 1, "name": "Test League", "season": 2026},
                     "teams": {"home": {"id": 1, "name": "Home"},
                               "away": {"id": 113, "name": "Opponent 13"}},
                     "goals": {"home": 2, "away": 1},
                 },
                 {
-                    "fixture": {"id": 14, "date": "2024-01-12T12:00:00+00:00",
+                    "fixture": {"id": 14, "date": "2026-01-12T12:00:00+00:00",
                                 "status": {"short": "FT"}},
-                    "league": {"id": 1, "name": "Test League", "season": 2024},
+                    "league": {"id": 1, "name": "Test League", "season": 2026},
                     "teams": {"home": {"id": 1, "name": "Home"},
                               "away": {"id": 114, "name": "Opponent 14"}},
                     "goals": {"home": 1, "away": 0},
@@ -176,12 +176,12 @@ class IntelligentScannerTests(unittest.TestCase):
                 )
                 worker._history_cache = {}
                 history = worker._load_team_history(
-                    database, {"id": 1, "name": "Home"}, "2025-01-01", worker._history_cache
+                    database, {"id": 1, "name": "Home"}, "2026-12-31", worker._history_cache
                 )
                 ids = [(match.get("fixture") or {}).get("id") for match in history]
                 self.assertEqual(ids, expected)
                 self.assertEqual(len(ids), len(set(ids)))
-                self.assertTrue(all((match.get("fixture") or {}).get("date", "")[:10] < "2025-01-01" for match in history))
+                self.assertTrue(all((match.get("fixture") or {}).get("date", "")[:10] < "2026-12-31" for match in history))
 
 
 
