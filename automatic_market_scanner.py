@@ -60,12 +60,16 @@ def build_market_candidates(home_name, away_name, markets, home_xg, away_xg):
         ("Home win", home_win), ("Draw", draw), ("Away win", away_win),
     ):
         result.append(_candidate("Match Result (1X2)", selection, probability, rel("1X2")))
-    for selection, probability in (
-        ("1X — Home or Draw", home_win + draw),
-        ("X2 — Draw or Away", draw + away_win),
-        ("12 — Either team wins", home_win + away_win),
+    double_chance = markets.get("double_chance") or {}
+    for selection, key, probability in (
+        ("1X — Home or Draw", "1X", home_win + draw),
+        ("X2 — Draw or Away", "X2", draw + away_win),
+        ("12 — Either team wins", "12", home_win + away_win),
     ):
-        result.append(_candidate("Double Chance", selection, probability))
+        result.append(_candidate(
+            "Double Chance", selection, double_chance.get(key, probability),
+            rel("Double Chance " + key),
+        ))
 
     btts_yes = float(markets.get("btts_yes", 0.0))
     result.extend([
