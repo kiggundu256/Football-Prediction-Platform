@@ -78,7 +78,7 @@ def _market_add(stats, name, predicted, actual, probability=None, brier_value=No
             item["baseline_graded"] += 1
     if ("Over " in name or "Under " in name or name.startswith("BTTS ")
             or name.startswith("Corners ") or name.startswith("Home team corners ")
-            or name.startswith("Away team corners ")) and isinstance(actual, bool):
+            or name.startswith("Away team corners ") or name.startswith("Double Chance ")) and isinstance(actual, bool):
         item["event_count"] += int(actual)
 
 
@@ -122,7 +122,7 @@ def _finalize_market_stats(stats):
             "selection_accuracy": item["correct"] / item["graded"] if item["graded"] else None,
             "observed_event_rate": (
                 item["event_count"] / item["graded"]
-                if item["event_count"] or ("Over " in name or "Under " in name or name.startswith("BTTS "))
+                if item["event_count"] or ("Over " in name or "Under " in name or name.startswith("BTTS ") or name.startswith("Double Chance "))
                 else item["correct"] / item["graded"]
                 if name.startswith("Correct score") and item["graded"] else None
             ),
@@ -387,6 +387,20 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 brier_value=model_brier, raw_brier_value=raw_model_brier,
                 baseline_brier_value=baseline_brier,
             )
+
+            # Grade each Double Chance outcome as its own binary event.
+            raw_dc = {
+                "Double Chance 1X": raw_probabilities[0] + raw_probabilities[1],
+                "Double Chance X2": raw_probabilities[1] + raw_probabilities[2],
+                "Double Chance 12": raw_probabilities[0] + raw_probabilities[2],
+            }
+            actual_dc = {
+                "Double Chance 1X": actual_home >= actual_away,
+                "Double Chance X2": actual_away >= actual_home,
+                "Double Chance 12": actual_home != actual_away,
+            }
+            for market_name, raw_probability in raw_dc.items():
+                record_binary_market(market_name, raw_probability, actual_dc[market_name])
             calibration_samples["1X2 most-likely outcome"].append(
                 (max(probabilities), predicted_outcome == actual_outcome)
             )
@@ -516,6 +530,9 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             actual_btts = actual_home > 0 and actual_away > 0
             add_baseline_event("BTTS Yes", actual_btts)
             add_baseline_event("BTTS No", not actual_btts)
+            add_baseline_event("Double Chance 1X", actual_home >= actual_away)
+            add_baseline_event("Double Chance X2", actual_away >= actual_home)
+            add_baseline_event("Double Chance 12", actual_home != actual_away)
 
             try:
                 corner_data = json.loads(row["stats_json"] or "{}")
@@ -704,8 +721,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             name: _calibration_bins(samples) for name, samples in sorted(raw_calibration_samples.items())
         },
         "market_calibration": {
-            "markets": "1X2, goals, BTTS and all corner totals/team markets",
-            "method": "Separate prequential raw-probability-bin calibration for binary markets plus one-vs-rest 1X2 class calibration.",
+            "markets": "1X2, Double Chance 1X/X2/12, goals, BTTS and all corner totals/team markets",
+            "method": "Separate prequential raw-probability-bin calibration for binary markets, including Double Chance, plus one-vs-rest 1X2 class calibration.",
             "minimum_prior_samples": 30,
             "prior_strength": 30,
             "training_samples_by_market": dict(sorted(market_calibration_training_counts.items())),
