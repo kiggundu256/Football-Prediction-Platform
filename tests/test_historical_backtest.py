@@ -60,6 +60,14 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertEqual(result["evaluated_matches"], 2)
         self.assertEqual(result["skipped_insufficient_history"], 5)
         self.assertIn("1X2", result["by_market"])
+        for market in ("Double Chance 1X", "Double Chance X2", "Double Chance 12"):
+            self.assertIn(market, result["by_market"])
+            self.assertIn(market, result["calibration_by_market"])
+            self.assertIn(market, result["raw_calibration_by_market"])
+            self.assertEqual(result["by_market"][market]["graded"], 2)
+            self.assertEqual(result["by_market"][market]["sample_size_status"], "LOW SAMPLE — do not rely")
+        self.assertEqual(result["by_market"]["Double Chance 12"]["correct"], 2)
+        self.assertEqual(result["market_calibration"]["training_samples_by_market"]["Double Chance 1X"], 2)
         self.assertEqual(
             {item["model"] for item in result["by_model"]},
             {"Goal distribution", "Recent form", "Ensemble"},
