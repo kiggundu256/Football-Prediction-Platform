@@ -17,6 +17,11 @@ class AutomaticMarketScannerTests(unittest.TestCase):
             "Over 4.5", "Under 4.5", "Over 5.5", "Under 5.5",
         })
         self.assertIn("Double Chance", {item["category"] for item in candidates})
+        dc = {item["selection"]: item["probability"] for item in candidates
+              if item["category"] == "Double Chance"}
+        self.assertAlmostEqual(dc["1X — Home or Draw"], 0.75)
+        self.assertAlmostEqual(dc["X2 — Draw or Away"], 0.50)
+        self.assertAlmostEqual(dc["12 — Either team wins"], 0.75)
         self.assertIn("Correct Score", {item["category"] for item in candidates})
         self.assertIn("Clean Sheet", {item["category"] for item in candidates})
         self.assertIn("Win To Nil", {item["category"] for item in candidates})
@@ -59,6 +64,8 @@ class AutomaticMarketScannerTests(unittest.TestCase):
              "probability": 0.20, "reliability": "SUPPORTED (n=140)", "fixture": fixture},
             {"category": "Match Result (1X2)", "selection": "Away win",
              "probability": 0.12, "reliability": "SUPPORTED (n=140)", "fixture": fixture},
+            {"category": "Double Chance", "selection": "1X — Home or Draw",
+             "probability": 0.88, "reliability": "SUPPORTED (n=140)", "fixture": second_fixture},
             {"category": "Both Teams To Score", "selection": "Yes",
              "probability": 0.64, "reliability": "CAUTION (n=65)", "fixture": second_fixture},
             {"category": "Total Goals", "selection": "Over 2.5",
@@ -72,11 +79,11 @@ class AutomaticMarketScannerTests(unittest.TestCase):
         picks = grouped["TOP PICKS — VALIDATED"]
         self.assertEqual(
             [item["selection"] for item in picks],
-            ["Home win", "Yes"],
+            ["1X — Home or Draw", "Home win"],
         )
         self.assertEqual([item["rank"] for item in picks], [1, 2])
         self.assertEqual(picks[0]["sample_count"], 140)
-        self.assertIn("historical sample n=65", picks[1]["note"])
+        self.assertIn("historical sample n=140", picks[0]["note"])
 
     def test_validated_top_picks_require_probability_floor(self):
         candidate = {
