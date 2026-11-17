@@ -366,6 +366,8 @@ class MainWindow(QMainWindow):
         self.add_scrollable_tab(self.player_intelligence_page(), "Player Intelligence")
         self.add_scrollable_tab(self.prediction_tracker_page(), "Prediction Tracker")
         outer.addWidget(self.tabs); self.setCentralWidget(root)
+        # Open directly on the real-fixture scanner, where Double Chance is the default market.
+        self.tabs.setCurrentIndex(1)
         self.refresh_history()
         self.update_api_status()
         self.restore_cached_fixtures()
@@ -1771,7 +1773,7 @@ class MainWindow(QMainWindow):
         scanner_layout = QVBoxLayout(self.scanner_panel)
         scanner_layout.setContentsMargins(4, 4, 4, 4)
         scanner_title_row = QHBoxLayout()
-        scanner_heading = QLabel("AUTOMATIC MATCH SCANNER — RANKED MARKET CATEGORIES")
+        scanner_heading = QLabel("AUTOMATIC MATCH SCANNER — DOUBLE CHANCE FIRST")
         scanner_heading.setStyleSheet("font-size:13px;font-weight:800;color:#168BFF")
         scanner_title_row.addWidget(scanner_heading)
         scanner_title_row.addStretch()
@@ -1785,7 +1787,7 @@ class MainWindow(QMainWindow):
         self.stop_scan_button.clicked.connect(self.stop_scanner)
         scanner_title_row.addWidget(self.stop_scan_button)
         scanner_layout.addLayout(scanner_title_row)
-        self.scanner_summary = QLabel("Load real fixtures, then select Scan All Fixtures. Results will be grouped by market and ranked by estimated probability.")
+        self.scanner_summary = QLabel("Load real fixtures, then scan. Double Chance (1X, X2 and 12) is the default view; all other markets remain available in separate categories.")
         self.scanner_summary.setWordWrap(True)
         self.scanner_summary.setStyleSheet("color:#AFC3DF;padding:4px;background:#111D30;border:1px solid #26364D;border-radius:6px")
         scanner_layout.addWidget(self.scanner_summary)
@@ -1936,12 +1938,14 @@ class MainWindow(QMainWindow):
         self.scanner_category.blockSignals(True)
         self.scanner_category.clear()
         categories = sorted(self.scanner_results)
-        for priority in ("ALL MARKET OPPORTUNITIES", "TOP PICKS — VALIDATED"):
+        for priority in ("Double Chance", "TOP PICKS — VALIDATED", "ALL MARKET OPPORTUNITIES"):
             if priority in categories:
                 categories.remove(priority)
                 categories.insert(0, priority)
         for category in categories:
             self.scanner_category.addItem(category)
+        if self.scanner_category.findText("Double Chance") >= 0:
+            self.scanner_category.setCurrentIndex(self.scanner_category.findText("Double Chance"))
         self.scanner_category.blockSignals(False)
         self.render_scanner_category(self.scanner_category.currentText())
         self.live_content_splitter.setSizes([260, 75, 90, 390])
