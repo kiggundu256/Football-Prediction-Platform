@@ -389,10 +389,12 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             )
 
             # Grade each Double Chance outcome as its own binary event.
+            # Match live inference: derive DC from the pre-DC-calibration
+            # 1X2 distribution, which has already received one-vs-rest calibration.
             raw_dc = {
-                "Double Chance 1X": raw_probabilities[0] + raw_probabilities[1],
-                "Double Chance X2": raw_probabilities[1] + raw_probabilities[2],
-                "Double Chance 12": raw_probabilities[0] + raw_probabilities[2],
+                "Double Chance 1X": probabilities[0] + probabilities[1],
+                "Double Chance X2": probabilities[1] + probabilities[2],
+                "Double Chance 12": probabilities[0] + probabilities[2],
             }
             actual_dc = {
                 "Double Chance 1X": actual_home >= actual_away,
