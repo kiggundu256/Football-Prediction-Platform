@@ -101,6 +101,16 @@ def apply_live_calibration(markets, profile, min_samples=30, prior_strength=30):
     )
     result.update(calibrated_1x2)
 
+    # Calibrate the three overlapping Double Chance events independently.
+    double_chance = {
+        "1X": result["home_win"] + result["draw"],
+        "X2": result["draw"] + result["away_win"],
+        "12": result["home_win"] + result["away_win"],
+    }
+    for key, value in list(double_chance.items()):
+        double_chance[key] = adjust_market("Double Chance " + key, value)
+    result["double_chance"] = double_chance
+
     goals = result.get("over") or {}
     for line, value in list(goals.items()):
         goals[line] = adjust_market(f"Over {line}", value)
@@ -131,6 +141,13 @@ def apply_live_calibration(markets, profile, min_samples=30, prior_strength=30):
             max(result[key] for key in ("home_win", "draw", "away_win")),
             reliability_bins["1X2 most-likely outcome"],
         )
+    for key in ("1X", "X2", "12"):
+        reliability_key = "Double Chance " + key
+        if reliability_key in reliability_bins:
+            reliability_summary[reliability_key] = assess_probability_reliability(
+                (result.get("double_chance") or {}).get(key, 0.0),
+                reliability_bins[reliability_key],
+            )
     if "2.5" in (result.get("over") or {}) and "Over 2.5" in reliability_bins:
         reliability_summary["Goals Over 2.5"] = assess_probability_reliability(
             result["over"]["2.5"], reliability_bins["Over 2.5"]

@@ -60,6 +60,34 @@ class ProbabilityCalibrationTests(unittest.TestCase):
         self.assertFalse(result["calibration_status"]["correct_score_calibrated"])
         self.assertEqual(markets["over"]["2.5"], 0.55)
 
+    def test_live_profile_calibrates_double_chance_independently(self):
+        bins = [[0, 0] for _ in range(10)]
+        bins[7] = [100, 55]
+        reliability_bins = [
+            {"count": 0, "mean_probability": None, "observed_rate": None,
+             "signed_gap": None, "overconfident": False}
+            for _ in range(10)
+        ]
+        reliability_bins[7] = {
+            "count": 100, "mean_probability": 0.75, "observed_rate": 0.55,
+            "signed_gap": 0.20, "overconfident": False,
+        }
+        profile = {
+            "version": 1, "from_year": 2020, "source_latest_match_date": "2026-11-06",
+            "markets": {
+                "Double Chance 1X": {"bins": bins, "training_samples": 100},
+            },
+            "outcome_1x2": {},
+            "reliability": {"Double Chance 1X": reliability_bins},
+        }
+        result = apply_live_calibration({
+            "home_win": 0.45, "draw": 0.30, "away_win": 0.25,
+        }, profile)
+        self.assertAlmostEqual(result["double_chance"]["1X"], (55 + 30 * 0.75) / 130)
+        self.assertIn("Double Chance 1X", result["calibration_status"]["historical_reliability"])
+        self.assertAlmostEqual(result["double_chance"]["X2"], 0.55)
+        self.assertAlmostEqual(result["double_chance"]["12"], 0.70)
+
     def test_reliability_label_respects_sample_size_and_overconfidence(self):
         bins = [{"count": 0, "signed_gap": None, "overconfident": False}
                 for _ in range(10)]

@@ -366,6 +366,8 @@ class MainWindow(QMainWindow):
         self.add_scrollable_tab(self.player_intelligence_page(), "Player Intelligence")
         self.add_scrollable_tab(self.prediction_tracker_page(), "Prediction Tracker")
         outer.addWidget(self.tabs); self.setCentralWidget(root)
+        # Open directly on the real-fixture scanner, where Double Chance is the default market.
+        self.tabs.setCurrentIndex(1)
         self.refresh_history()
         self.update_api_status()
         self.restore_cached_fixtures()
@@ -1771,7 +1773,7 @@ class MainWindow(QMainWindow):
         scanner_layout = QVBoxLayout(self.scanner_panel)
         scanner_layout.setContentsMargins(4, 4, 4, 4)
         scanner_title_row = QHBoxLayout()
-        scanner_heading = QLabel("AUTOMATIC MATCH SCANNER — RANKED MARKET CATEGORIES")
+        scanner_heading = QLabel("AUTOMATIC MATCH SCANNER — DOUBLE CHANCE FIRST")
         scanner_heading.setStyleSheet("font-size:13px;font-weight:800;color:#168BFF")
         scanner_title_row.addWidget(scanner_heading)
         scanner_title_row.addStretch()
@@ -1785,7 +1787,7 @@ class MainWindow(QMainWindow):
         self.stop_scan_button.clicked.connect(self.stop_scanner)
         scanner_title_row.addWidget(self.stop_scan_button)
         scanner_layout.addLayout(scanner_title_row)
-        self.scanner_summary = QLabel("Load real fixtures, then select Scan All Fixtures. Results will be grouped by market and ranked by estimated probability.")
+        self.scanner_summary = QLabel("Load real fixtures, then scan. Double Chance (1X, X2 and 12) is the default view; all other markets remain available in separate categories.")
         self.scanner_summary.setWordWrap(True)
         self.scanner_summary.setStyleSheet("color:#AFC3DF;padding:4px;background:#111D30;border:1px solid #26364D;border-radius:6px")
         scanner_layout.addWidget(self.scanner_summary)
@@ -1936,12 +1938,14 @@ class MainWindow(QMainWindow):
         self.scanner_category.blockSignals(True)
         self.scanner_category.clear()
         categories = sorted(self.scanner_results)
-        for priority in ("ALL MARKET OPPORTUNITIES", "TOP PICKS — VALIDATED"):
+        for priority in ("Double Chance", "TOP PICKS — VALIDATED", "ALL MARKET OPPORTUNITIES"):
             if priority in categories:
                 categories.remove(priority)
                 categories.insert(0, priority)
         for category in categories:
             self.scanner_category.addItem(category)
+        if self.scanner_category.findText("Double Chance") >= 0:
+            self.scanner_category.setCurrentIndex(self.scanner_category.findText("Double Chance"))
         self.scanner_category.blockSignals(False)
         self.render_scanner_category(self.scanner_category.currentText())
         self.live_content_splitter.setSizes([260, 75, 90, 390])
@@ -3642,6 +3646,28 @@ class MainWindow(QMainWindow):
         self.backtest_market_table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.backtest_market_table)
 
+        dc_title = QLabel("DOUBLE CHANCE PERFORMANCE — PRIMARY MARKET")
+        dc_title.setStyleSheet("font-size:15px;font-weight:800;color:#168BFF")
+        box.addWidget(dc_title)
+        dc_note = QLabel(
+            "Each outcome is graded independently. Hit rate shows how often the named Double Chance event occurred; "
+            "Brier scores measure probability quality. All calibration and baselines use earlier dates only."
+        )
+        dc_note.setWordWrap(True)
+        box.addWidget(dc_note)
+        self.backtest_double_chance_table = QTableWidget(0, 8)
+        self.backtest_double_chance_table.setHorizontalHeaderLabels([
+            "Double Chance", "Graded", "Hit rate", "Calibrated Brier",
+            "Raw Brier", "Baseline Brier", "Improvement", "Sample warning"
+        ])
+        self.backtest_double_chance_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.backtest_double_chance_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self.backtest_double_chance_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.backtest_double_chance_table.setMaximumHeight(160)
+        self.backtest_double_chance_table.horizontalHeader().setStretchLastSection(True)
+        enable_table_copy(self.backtest_double_chance_table)
+        box.addWidget(self.backtest_double_chance_table)
+
         self.backtest_score_summary = QLabel("Correct-score top-1 and top-5 coverage: —")
         self.backtest_score_summary.setWordWrap(True)
         box.addWidget(self.backtest_score_summary)
@@ -3865,6 +3891,7 @@ class MainWindow(QMainWindow):
             self.backtest_status.setText(result.get("message", "No matches could be evaluated."))
             self.backtest_comparison.setText("No 1X2 comparison is available.")
             self.backtest_market_table.setRowCount(0)
+            self.backtest_double_chance_table.setRowCount(0)
             self.backtest_model_table.setRowCount(0)
             self.backtest_calibration_table.setRowCount(0)
             self.backtest_score_summary.setText("Correct-score coverage is unavailable.")
@@ -3904,7 +3931,7 @@ class MainWindow(QMainWindow):
         self.backtest_status.setText(
             f"Completed: {result['evaluated_matches']:,} historical matches evaluated from {result['from_year']} onward. "
             f"Corner market selections graded: {result.get('corner_market_predictions', 0):,}. "
-            f"Pre-match calibration covers 1X2, goals, BTTS and corner markets using earlier dates only "
+            f"Pre-match calibration covers 1X2, Double Chance, goals, BTTS and corner markets using earlier dates only "
             f"({result.get('market_calibration', {}).get('minimum_prior_samples', 30)} prior same-bin samples required; "
             f"{result.get('market_calibration', {}).get('prior_strength', 30)} pseudo-sample shrinkage). "
             "Every reported market is benchmarked against a suitable historical baseline. "
@@ -3972,6 +3999,30 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 self.backtest_market_table.setItem(row, column, QTableWidgetItem(str(value)))
+
+        dc_names = ("Double Chance 1X", "Double Chance X2", "Double Chance 12")
+        dc_markets = result.get("by_market", {})
+        self.backtest_double_chance_table.setRowCount(
+            sum(1 for name in dc_names if name in dc_markets)
+        )
+        dc_row = 0
+        for name in dc_names:
+            stats = dc_markets.get(name)
+            if not stats:
+                continue
+            values = [
+                name.replace("Double Chance ", ""),
+                stats.get("graded", 0),
+                f"{stats['observed_event_rate']:.1%}" if stats.get("observed_event_rate") is not None else "—",
+                f"{stats['brier_score']:.4f}" if stats.get("brier_score") is not None else "—",
+                f"{stats['raw_brier_score']:.4f}" if stats.get("raw_brier_score") is not None else "—",
+                f"{stats['baseline_brier_score']:.4f}" if stats.get("baseline_brier_score") is not None else "—",
+                f"{stats['baseline_improvement']:+.4f}" if stats.get("baseline_improvement") is not None else "—",
+                stats.get("sample_size_status", "—"),
+            ]
+            for column, value in enumerate(values):
+                self.backtest_double_chance_table.setItem(dc_row, column, QTableWidgetItem(str(value)))
+            dc_row += 1
 
         groups = result.get("by_competition_season", [])
         self.backtest_comp_table.setRowCount(len(groups))
