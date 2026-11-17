@@ -140,9 +140,8 @@ def build_market_candidates(home_name, away_name, markets, home_xg, away_xg):
 def _validated_top_picks(candidates, minimum_probability=0.60, limit=20):
     """Select cross-market picks only where live calibration has adequate support.
 
-    The current reliability profile validates 1X2 most-likely outcomes, BTTS Yes,
-    Over 2.5 goals and total Corners Over 9.5. Other markets remain available in
-    their category tables but are not promoted as validated picks.
+    Double Chance is promoted only when its own historical reliability profile
+    supports it. Other markets remain available in their category tables.
     """
     eligible = []
     best_1x2 = {}
@@ -159,14 +158,20 @@ def _validated_top_picks(candidates, minimum_probability=0.60, limit=20):
             if current is None or item.get("probability", 0) > current.get("probability", 0):
                 best_1x2[key] = item
         elif (
-            (category == "Both Teams To Score" and selection == "Yes")
+            (category == "Double Chance" and selection in (
+                "1X — Home or Draw", "X2 — Draw or Away", "12 — Either team wins"
+            ))
+            or (category == "Both Teams To Score" and selection == "Yes")
             or (category == "Total Goals" and selection == "Over 2.5")
             or (category == "Total Corners" and selection == "Over 9.5")
         ):
             eligible.append(item)
 
     eligible.extend(best_1x2.values())
-    status_order = {"SUPPORTED": 0, "UNDERCONFIDENT": 1, "CAUTION": 2}
+    status_order = {
+        "SUPPORTED": 0, "UNDERCONFIDENT": 1, "CAUTION": 2,
+        "NO CLEAR OVERCONFIDENCE": 3,
+    }
     validated = []
     for source in eligible:
         item = dict(source)
