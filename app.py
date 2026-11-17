@@ -3646,6 +3646,28 @@ class MainWindow(QMainWindow):
         self.backtest_market_table.horizontalHeader().setStretchLastSection(True)
         box.addWidget(self.backtest_market_table)
 
+        dc_title = QLabel("DOUBLE CHANCE PERFORMANCE — PRIMARY MARKET")
+        dc_title.setStyleSheet("font-size:15px;font-weight:800;color:#168BFF")
+        box.addWidget(dc_title)
+        dc_note = QLabel(
+            "Each outcome is graded independently. Hit rate shows how often the named Double Chance event occurred; "
+            "Brier scores measure probability quality. All calibration and baselines use earlier dates only."
+        )
+        dc_note.setWordWrap(True)
+        box.addWidget(dc_note)
+        self.backtest_double_chance_table = QTableWidget(0, 8)
+        self.backtest_double_chance_table.setHorizontalHeaderLabels([
+            "Double Chance", "Graded", "Hit rate", "Calibrated Brier",
+            "Raw Brier", "Baseline Brier", "Improvement", "Sample warning"
+        ])
+        self.backtest_double_chance_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.backtest_double_chance_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self.backtest_double_chance_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.backtest_double_chance_table.setMaximumHeight(160)
+        self.backtest_double_chance_table.horizontalHeader().setStretchLastSection(True)
+        enable_table_copy(self.backtest_double_chance_table)
+        box.addWidget(self.backtest_double_chance_table)
+
         self.backtest_score_summary = QLabel("Correct-score top-1 and top-5 coverage: —")
         self.backtest_score_summary.setWordWrap(True)
         box.addWidget(self.backtest_score_summary)
@@ -3869,6 +3891,7 @@ class MainWindow(QMainWindow):
             self.backtest_status.setText(result.get("message", "No matches could be evaluated."))
             self.backtest_comparison.setText("No 1X2 comparison is available.")
             self.backtest_market_table.setRowCount(0)
+            self.backtest_double_chance_table.setRowCount(0)
             self.backtest_model_table.setRowCount(0)
             self.backtest_calibration_table.setRowCount(0)
             self.backtest_score_summary.setText("Correct-score coverage is unavailable.")
@@ -3908,7 +3931,7 @@ class MainWindow(QMainWindow):
         self.backtest_status.setText(
             f"Completed: {result['evaluated_matches']:,} historical matches evaluated from {result['from_year']} onward. "
             f"Corner market selections graded: {result.get('corner_market_predictions', 0):,}. "
-            f"Pre-match calibration covers 1X2, goals, BTTS and corner markets using earlier dates only "
+            f"Pre-match calibration covers 1X2, Double Chance, goals, BTTS and corner markets using earlier dates only "
             f"({result.get('market_calibration', {}).get('minimum_prior_samples', 30)} prior same-bin samples required; "
             f"{result.get('market_calibration', {}).get('prior_strength', 30)} pseudo-sample shrinkage). "
             "Every reported market is benchmarked against a suitable historical baseline. "
@@ -3976,6 +3999,30 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 self.backtest_market_table.setItem(row, column, QTableWidgetItem(str(value)))
+
+        dc_names = ("Double Chance 1X", "Double Chance X2", "Double Chance 12")
+        dc_markets = result.get("by_market", {})
+        self.backtest_double_chance_table.setRowCount(
+            sum(1 for name in dc_names if name in dc_markets)
+        )
+        dc_row = 0
+        for name in dc_names:
+            stats = dc_markets.get(name)
+            if not stats:
+                continue
+            values = [
+                name.replace("Double Chance ", ""),
+                stats.get("graded", 0),
+                f"{stats['observed_event_rate']:.1%}" if stats.get("observed_event_rate") is not None else "—",
+                f"{stats['brier_score']:.4f}" if stats.get("brier_score") is not None else "—",
+                f"{stats['raw_brier_score']:.4f}" if stats.get("raw_brier_score") is not None else "—",
+                f"{stats['baseline_brier_score']:.4f}" if stats.get("baseline_brier_score") is not None else "—",
+                f"{stats['baseline_improvement']:+.4f}" if stats.get("baseline_improvement") is not None else "—",
+                stats.get("sample_size_status", "—"),
+            ]
+            for column, value in enumerate(values):
+                self.backtest_double_chance_table.setItem(dc_row, column, QTableWidgetItem(str(value)))
+            dc_row += 1
 
         groups = result.get("by_competition_season", [])
         self.backtest_comp_table.setRowCount(len(groups))
