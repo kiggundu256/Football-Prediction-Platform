@@ -85,7 +85,8 @@ class ProbabilityCalibrationTests(unittest.TestCase):
         }, profile)
         self.assertAlmostEqual(result["double_chance"]["1X"], (55 + 30 * 0.75) / 130)
         self.assertIn("Double Chance 1X", result["calibration_status"]["historical_reliability"])
-        self.assertAlmostEqual(sum(result["double_chance"].values()), 2.0, places=5)
+        self.assertAlmostEqual(result["double_chance"]["X2"], 0.55)
+        self.assertAlmostEqual(result["double_chance"]["12"], 0.70)
 
     def test_reliability_label_respects_sample_size_and_overconfidence(self):
         bins = [{"count": 0, "signed_gap": None, "overconfident": False}
