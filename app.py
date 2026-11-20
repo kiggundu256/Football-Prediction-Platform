@@ -34,7 +34,7 @@ from head_to_head import summarize_head_to_head
 from ui_theme import APP_STYLESHEET
 from settlement import settle_markets
 from performance_metrics import summarize_performance
-from historical_backtest import run_historical_backtest
+from historical_backtest import run_historical_backtest, run_profile_weighting_experiment
 from probability_calibration import apply_live_calibration
 from fixture_view import filter_fixtures, competition_options, fixture_status_group
 from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
@@ -312,6 +312,28 @@ class HistoricalBacktestWorker(QThread):
     def run(self):
         try:
             result = run_historical_backtest(
+                self.database_path,
+                from_year=self.from_year,
+                minimum_history=self.minimum_history,
+            )
+            self.completed.emit(result)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class ProfileWeightingExperimentWorker(QThread):
+    completed = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, database_path, from_year, minimum_history):
+        super().__init__()
+        self.database_path = database_path
+        self.from_year = from_year
+        self.minimum_history = minimum_history
+
+    def run(self):
+        try:
+            result = run_profile_weighting_experiment(
                 self.database_path,
                 from_year=self.from_year,
                 minimum_history=self.minimum_history,
@@ -3591,6 +3613,18 @@ class MainWindow(QMainWindow):
         self.backtest_status = QLabel("Not run yet. This test reads your imported history and does not modify it.")
         self.backtest_status.setWordWrap(True)
         box.addWidget(self.backtest_status)
+        self.profile_experiment_button = QPushButton("Compare Baseline vs Recency-Weighted")
+        self.profile_experiment_button.clicked.connect(self.run_profile_weighting_experiment_ui)
+        box.addWidget(self.profile_experiment_button)
+        self.profile_experiment_result = QLabel(
+            "Profile experiment not run. This compares two isolated walk-forward strategies "
+            "on the same historical dates; it does not change production predictions."
+        )
+        self.profile_experiment_result.setWordWrap(True)
+        self.profile_experiment_result.setStyleSheet(
+            "color:#C7D7EF;padding:10px;background:#111D30;border:1px solid #26364D;border-radius:7px"
+        )
+        box.addWidget(self.profile_experiment_result)
         backtest_cards = QGridLayout()
         self.backtest_source_card = Card("COMPLETED SOURCE MATCHES", "—", "From selected start year")
         self.backtest_evaluated_card = Card("MATCHES EVALUATED", "—", "Enough prior team history")
@@ -3773,6 +3807,63 @@ class MainWindow(QMainWindow):
     def historical_backtest_failed(self, message):
         self.backtest_status.setText("Backtest failed: " + message)
         QMessageBox.warning(self, "Historical backtest", message)
+
+    def run_profile_weighting_experiment_ui(self):
+        if getattr(self, "profile_experiment_worker", None) and self.profile_experiment_worker.isRunning():
+            return
+        self.profile_experiment_button.setEnabled(False)
+        self.profile_experiment_result.setText(
+            "Experiment running: baseline and recency-weighted models are being evaluated "
+            "chronologically against the same local historical database. The app remains responsive."
+        )
+        self.profile_experiment_worker = ProfileWeightingExperimentWorker(
+            self.store.path,
+            self.backtest_from_year.value(),
+            self.backtest_min_history.value(),
+        )
+        self.profile_experiment_worker.completed.connect(self.display_profile_weighting_experiment)
+        self.profile_experiment_worker.failed.connect(self.profile_weighting_experiment_failed)
+        self.profile_experiment_worker.finished.connect(
+            lambda: self.profile_experiment_button.setEnabled(True)
+        )
+        self.profile_experiment_worker.start()
+
+    def profile_weighting_experiment_failed(self, message):
+        self.profile_experiment_result.setText("Profile experiment failed: " + message)
+        QMessageBox.warning(self, "Profile weighting experiment", message)
+
+    def display_profile_weighting_experiment(self, result):
+        baseline = result.get("baseline", {})
+        candidate = result.get("recency_weighted", {})
+        delta = result.get("delta_candidate_minus_baseline", {})
+        def metric(value, digits=4):
+            return f"{float(value):.{digits}f}" if value is not None else "—"
+        def percent(value):
+            return f"{float(value):.1%}" if value is not None else "—"
+        same_coverage = bool(result.get("same_evaluation_coverage"))
+        coverage_note = (
+            "Same evaluation coverage." if same_coverage
+            else "WARNING: evaluation coverage differs; do not compare these scores as a fair head-to-head."
+        )
+        self.profile_experiment_result.setText(
+            "BASELINE vs RECENCY-WEIGHTED PROFILE EXPERIMENT\\n"
+            f"Period: {result.get('from_year')}+ | Minimum prior matches/team: "
+            f"{result.get('minimum_history')}\\n"
+            f"Evaluated matches: baseline {baseline.get('evaluated_matches', 0):,} | "
+            f"candidate {candidate.get('evaluated_matches', 0):,} | {coverage_note}\\n"
+            f"1X2 accuracy: {percent(baseline.get('accuracy_1x2'))} → "
+            f"{percent(candidate.get('accuracy_1x2'))} "
+            f"(candidate change {percent(delta.get('accuracy_1x2')) if delta.get('accuracy_1x2') is not None else '—'})\\n"
+            f"Brier score: {metric(baseline.get('brier_score_1x2'))} → "
+            f"{metric(candidate.get('brier_score_1x2'))} "
+            f"(improvement {metric(delta.get('brier_improvement'))})\\n"
+            f"Log loss: {metric(baseline.get('log_loss_1x2'))} → "
+            f"{metric(candidate.get('log_loss_1x2'))} "
+            f"(improvement {metric(delta.get('log_loss_improvement'))})\\n"
+            f"Promotion gate: {'PASSED — review market/competition breakdowns before any promotion' if result.get('promotion_gate_passed') else 'NOT PASSED — keep the current production profile'}\\n"
+            f"{result.get('recommendation', '')}\\n"
+            "This is an isolated experiment. Production predictions have not been changed."
+        )
 
     def copy_historical_backtest_summary(self):
         """Copy a compact summary that is safe to paste into a chat message."""
