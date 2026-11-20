@@ -270,6 +270,12 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         for name in ("home_win", "draw", "away_win")
     }
     pending_outcome_calibration = defaultdict(list)
+    draw_samples = []
+    raw_draw_samples = []
+    draw_competition = defaultdict(lambda: {"n": 0, "draws": 0, "brier": 0.0, "log_loss": 0.0, "correct": 0})
+    draw_periods = defaultdict(lambda: {"n": 0, "draws": 0, "brier": 0.0, "log_loss": 0.0, "correct": 0})
+    draw_tp = draw_fp = draw_fn = 0
+    draw_brier_sum = draw_log_loss_sum = draw_raw_brier_sum = draw_raw_log_loss_sum = 0.0
     market_event_history = defaultdict(lambda: [0, 0])
     score_baseline_history = defaultdict(lambda: {"matches": 0, "scores": defaultdict(int)})
     score_top1_correct = score_top5_correct = score_graded = 0
@@ -342,6 +348,39 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 if calibrated_total > 0 else list(raw_probabilities)
             )
             calibrated_ensemble = dict(zip(outcome_keys, probabilities))
+            draw_probability = max(0.0, min(1.0, float(calibrated_ensemble["draw"])))
+            raw_draw_probability = max(0.0, min(1.0, float(markets["draw"])))
+            actual_draw = actual_outcome == 1
+            predicted_draw = draw_probability >= max(
+                float(calibrated_ensemble["home_win"]), float(calibrated_ensemble["away_win"])
+            )
+            draw_brier = (draw_probability - float(actual_draw)) ** 2
+            draw_log_loss = -log(max(draw_probability if actual_draw else 1.0 - draw_probability, 1e-15))
+            raw_draw_brier = (raw_draw_probability - float(actual_draw)) ** 2
+            raw_draw_log_loss = -log(max(raw_draw_probability if actual_draw else 1.0 - raw_draw_probability, 1e-15))
+            draw_brier_sum += draw_brier
+            draw_log_loss_sum += draw_log_loss
+            draw_raw_brier_sum += raw_draw_brier
+            draw_raw_log_loss_sum += raw_draw_log_loss
+            draw_tp += int(predicted_draw and actual_draw)
+            draw_fp += int(predicted_draw and not actual_draw)
+            draw_fn += int(not predicted_draw and actual_draw)
+            draw_samples.append((draw_probability, actual_draw))
+            raw_draw_samples.append((raw_draw_probability, actual_draw))
+            comp_key = str(row["country"] or "Unknown") + " | " + str(row["competition"] or "Unknown") + " | " + str(row["season"] or "Unknown")
+            draw_group = draw_competition[comp_key]
+            draw_group["n"] += 1
+            draw_group["draws"] += int(actual_draw)
+            draw_group["brier"] += draw_brier
+            draw_group["log_loss"] += draw_log_loss
+            draw_group["correct"] += int(predicted_draw == actual_draw)
+            period_key = str(row["match_date"] or "")[:4] or "Unknown"
+            period_group = draw_periods[period_key]
+            period_group["n"] += 1
+            period_group["draws"] += int(actual_draw)
+            period_group["brier"] += draw_brier
+            period_group["log_loss"] += draw_log_loss
+            period_group["correct"] += int(predicted_draw == actual_draw)
             predicted_outcome = max(range(3), key=lambda index: probabilities[index])
             for key, raw_probability in zip(outcome_keys, raw_probabilities):
                 pending_outcome_calibration[key].append(
@@ -705,6 +744,26 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         "evaluated_matches": evaluated,
         "skipped_insufficient_history": skipped_insufficient_history,
         "accuracy_1x2": market_stats["1X2"]["correct"] / market_stats["1X2"]["graded"],
+        "draw_audit": {
+            "graded": len(draw_samples),
+            "actual_draws": sum(int(actual) for _, actual in draw_samples),
+            "observed_draw_rate": sum(int(actual) for _, actual in draw_samples) / len(draw_samples) if draw_samples else None,
+            "mean_predicted_draw_probability": sum(p for p, _ in draw_samples) / len(draw_samples) if draw_samples else None,
+            "prediction_accuracy": (draw_tp + (len(draw_samples) - draw_tp - draw_fp - draw_fn)) / len(draw_samples) if draw_samples else None,
+            "precision": draw_tp / (draw_tp + draw_fp) if draw_tp + draw_fp else None,
+            "recall": draw_tp / (draw_tp + draw_fn) if draw_tp + draw_fn else None,
+            "true_positives": draw_tp, "false_positives": draw_fp, "false_negatives": draw_fn,
+            "brier_score": draw_brier_sum / len(draw_samples) if draw_samples else None,
+            "log_loss": draw_log_loss_sum / len(draw_samples) if draw_samples else None,
+            "raw_brier_score": draw_raw_brier_sum / len(raw_draw_samples) if raw_draw_samples else None,
+            "raw_log_loss": draw_raw_log_loss_sum / len(raw_draw_samples) if raw_draw_samples else None,
+            "calibration": _calibration_bins(draw_samples),
+            "raw_calibration": _calibration_bins(raw_draw_samples),
+            "by_competition_season": [{"competition_season": name, "matches": item["n"], "actual_draw_rate": item["draws"] / item["n"], "prediction_accuracy": item["correct"] / item["n"], "brier_score": item["brier"] / item["n"], "log_loss": item["log_loss"] / item["n"]} for name, item in sorted(draw_competition.items())],
+            "by_year": [{"year": name, "matches": item["n"], "actual_draw_rate": item["draws"] / item["n"], "prediction_accuracy": item["correct"] / item["n"], "brier_score": item["brier"] / item["n"], "log_loss": item["log_loss"] / item["n"]} for name, item in sorted(draw_periods.items())],
+            "classification_threshold": "Draw predicted when calibrated draw probability is at least as high as both calibrated home-win and away-win probabilities.",
+            "leakage_control": "Calibrated probabilities use only prior calendar days; same-day results are withheld until all forecasts for that day are complete.",
+        },
         "brier_score_1x2": brier_sum / evaluated,
         "log_loss_1x2": log_loss_sum / evaluated,
         "baseline_brier_score_1x2": baseline_brier_sum / evaluated,
@@ -901,6 +960,7 @@ def run_draw_probability_experiment(database_path, from_year=2020,
             "brier_score_1x2": baseline.get("brier_score_1x2"),
             "log_loss_1x2": baseline.get("log_loss_1x2"),
             "by_market": baseline.get("by_market", {}),
+            "draw_audit": baseline.get("draw_audit", {}),
             "calibration_by_market": baseline.get("calibration_by_market", {}),
             "by_competition_season": baseline.get("by_competition_season", []),
         },
@@ -910,6 +970,7 @@ def run_draw_probability_experiment(database_path, from_year=2020,
             "brier_score_1x2": candidate.get("brier_score_1x2"),
             "log_loss_1x2": candidate.get("log_loss_1x2"),
             "by_market": candidate.get("by_market", {}),
+            "draw_audit": candidate.get("draw_audit", {}),
             "calibration_by_market": candidate.get("calibration_by_market", {}),
             "by_competition_season": candidate.get("by_competition_season", []),
         },
