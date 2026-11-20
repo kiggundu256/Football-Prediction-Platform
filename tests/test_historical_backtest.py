@@ -6,7 +6,7 @@ from pathlib import Path
 from historical_backtest import (
     run_historical_backtest, _prequential_calibrate,
     _prequential_calibrate_from_bins, _calibration_bins,
-    _market_add, _finalize_market_stats,
+    _market_add, _finalize_market_stats, run_draw_probability_experiment,
 )
 
 
@@ -256,6 +256,23 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIsNone(bins[1]["observed_rate_upper_95"])
         self.assertFalse(bins[0]["overconfident"])
         self.assertFalse(bins[-1]["overconfident"])
+
+    def test_draw_probability_experiment_preserves_identical_coverage(self):
+        result = run_draw_probability_experiment(
+            self.path, from_year=2020, minimum_history=5
+        )
+        self.assertTrue(result["same_evaluation_coverage"])
+        self.assertEqual(result["baseline"]["evaluated_matches"], 2)
+        self.assertEqual(result["goal_anchored"]["evaluated_matches"], 2)
+        self.assertIn("Production predictions remain unchanged", result["methodology"])
+        self.assertIn("brier_improvement", result["delta_candidate_minus_baseline"])
+
+    def test_backtest_rejects_unknown_draw_strategy(self):
+        with self.assertRaises(ValueError):
+            run_historical_backtest(
+                self.path, from_year=2020, minimum_history=5,
+                form_draw_strategy="unknown",
+            )
 
     def test_no_evaluation_when_prior_history_is_insufficient(self):
         result = run_historical_backtest(self.path, from_year=2020, minimum_history=6)
