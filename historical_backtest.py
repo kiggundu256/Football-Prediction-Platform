@@ -224,10 +224,12 @@ def _build_backtest_profile(history, strategy="baseline"):
     raise ValueError("Unknown profile strategy: %s" % strategy)
 
 
-def run_historical_backtest(database_path, from_year=2020, minimum_history=5, max_matches=None, profile_strategy="baseline"):
+def run_historical_backtest(database_path, from_year=2020, minimum_history=5, max_matches=None, profile_strategy="baseline", form_draw_strategy="baseline"):
     """Run a chronological backtest against completed local historical matches."""
     if profile_strategy not in ("baseline", "recency_weighted"):
         raise ValueError("profile_strategy must be 'baseline' or 'recency_weighted'.")
+    if form_draw_strategy not in ("baseline", "goal_anchored"):
+        raise ValueError("form_draw_strategy must be 'baseline' or 'goal_anchored'.")
     if int(minimum_history) < 1:
         raise ValueError("minimum_history must be at least one.")
     db = sqlite3.connect(str(database_path))
@@ -298,7 +300,10 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 continue
 
             try:
-                forecast = predict_ensemble(home_profile, away_profile)
+                forecast = predict_ensemble(
+                    home_profile, away_profile,
+                    form_draw_strategy=form_draw_strategy,
+                )
             except (KeyError, TypeError, ValueError, OverflowError):
                 skipped_insufficient_history += 1
                 continue
@@ -692,6 +697,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     return {
         "from_year": int(from_year), "minimum_history": int(minimum_history),
         "profile_strategy": profile_strategy,
+        "form_draw_strategy": form_draw_strategy,
         "source_completed_matches": len(rows),
         "source_latest_match_date": source_latest_match_date,
         "live_calibration_profile": live_calibration_profile,
@@ -844,5 +850,87 @@ def run_profile_weighting_experiment(database_path, from_year=2020,
             "forecast for that date is generated. Each strategy calibrates only "
             "from its own prior out-of-sample predictions. Production predictions "
             "remain unchanged."
+        ),
+    }
+
+
+
+def run_draw_probability_experiment(database_path, from_year=2020,
+                                    minimum_history=5, max_matches=None):
+    """Compare the fixed 25% form-draw prior with goal-model-anchored draws.
+
+    This is an isolated formula-audit experiment. It keeps team profiles,
+    fixture coverage, calibration, market scoring and leakage controls identical.
+    """
+    baseline = run_historical_backtest(
+        database_path, from_year, minimum_history, max_matches,
+        profile_strategy="baseline", form_draw_strategy="baseline",
+    )
+    candidate = run_historical_backtest(
+        database_path, from_year, minimum_history, max_matches,
+        profile_strategy="baseline", form_draw_strategy="goal_anchored",
+    )
+
+    baseline_n = int(baseline.get("evaluated_matches") or 0)
+    candidate_n = int(candidate.get("evaluated_matches") or 0)
+    same_coverage = baseline_n == candidate_n
+
+    def gain(key):
+        left, right = baseline.get(key), candidate.get(key)
+        return float(left) - float(right) if left is not None and right is not None else None
+
+    brier_gain = gain("brier_score_1x2")
+    log_loss_gain = gain("log_loss_1x2")
+    accuracy_change = (
+        float(candidate["accuracy_1x2"]) - float(baseline["accuracy_1x2"])
+        if baseline.get("accuracy_1x2") is not None and candidate.get("accuracy_1x2") is not None
+        else None
+    )
+    passed = bool(
+        same_coverage and brier_gain is not None and log_loss_gain is not None
+        and brier_gain > 0 and log_loss_gain > 0
+    )
+    return {
+        "experiment": "fixed_draw_prior_vs_goal_anchored_draw",
+        "from_year": int(from_year),
+        "minimum_history": int(minimum_history),
+        "same_evaluation_coverage": same_coverage,
+        "baseline": {
+            "evaluated_matches": baseline_n,
+            "accuracy_1x2": baseline.get("accuracy_1x2"),
+            "brier_score_1x2": baseline.get("brier_score_1x2"),
+            "log_loss_1x2": baseline.get("log_loss_1x2"),
+            "by_market": baseline.get("by_market", {}),
+            "calibration_by_market": baseline.get("calibration_by_market", {}),
+            "by_competition_season": baseline.get("by_competition_season", []),
+        },
+        "goal_anchored": {
+            "evaluated_matches": candidate_n,
+            "accuracy_1x2": candidate.get("accuracy_1x2"),
+            "brier_score_1x2": candidate.get("brier_score_1x2"),
+            "log_loss_1x2": candidate.get("log_loss_1x2"),
+            "by_market": candidate.get("by_market", {}),
+            "calibration_by_market": candidate.get("calibration_by_market", {}),
+            "by_competition_season": candidate.get("by_competition_season", []),
+        },
+        "delta_candidate_minus_baseline": {
+            "accuracy_1x2": accuracy_change,
+            "brier_improvement": brier_gain,
+            "log_loss_improvement": log_loss_gain,
+        },
+        "promotion_gate_passed": passed,
+        "recommendation": (
+            "Candidate improves both Brier score and log loss on identical coverage; "
+            "review calibration and competition breakdowns before promotion."
+            if passed else
+            "Do not promote. The goal-anchored draw candidate has not improved both "
+            "Brier score and log loss on identical evaluation coverage."
+        ),
+        "methodology": (
+            "The only changed variable is the draw probability used by the recent-form "
+            "component: fixed 25% baseline versus the independent-Poisson goal model's "
+            "draw probability. Team profiles, home advantage, ensemble weights, fixture "
+            "selection, date-safe calibration and scoring remain identical. Production "
+            "predictions remain unchanged."
         ),
     }
