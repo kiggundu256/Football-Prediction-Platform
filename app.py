@@ -3663,6 +3663,26 @@ class MainWindow(QMainWindow):
         )
         box.addWidget(self.draw_experiment_result)
 
+        self.draw_audit_metrics_table = QTableWidget(0, 3)
+        self.draw_audit_metrics_table.setHorizontalHeaderLabels(["Draw-specific metric", "Fixed 25% baseline", "Goal-anchored candidate"])
+        self.draw_audit_calibration_table = QTableWidget(0, 8)
+        self.draw_audit_calibration_table.setHorizontalHeaderLabels([
+            "Probability bin", "Baseline n", "Baseline avg p", "Baseline observed",
+            "Candidate n", "Candidate avg p", "Candidate observed", "Candidate gap"
+        ])
+        self.draw_audit_period_table = QTableWidget(0, 10)
+        self.draw_audit_period_table.setHorizontalHeaderLabels([
+            "Period / competition-season", "Baseline n", "Baseline draw rate", "Baseline Brier", "Baseline log loss",
+            "Candidate n", "Candidate draw rate", "Candidate Brier", "Candidate log loss", "Brier improvement"
+        ])
+        for table in (self.draw_audit_metrics_table, self.draw_audit_calibration_table, self.draw_audit_period_table):
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+            table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+            table.setMaximumHeight(260)
+            table.horizontalHeader().setStretchLastSection(True)
+            box.addWidget(table)
+
         draw_detail_title = QLabel("Draw experiment — baseline vs candidate diagnostics")
         draw_detail_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
         box.addWidget(draw_detail_title)
@@ -3971,6 +3991,9 @@ class MainWindow(QMainWindow):
             ("MARKET COMPARISON", self.draw_market_table),
             ("CALIBRATION COMPARISON", self.draw_calibration_table),
             ("COMPETITION / SEASON COMPARISON", self.draw_comp_table),
+            ("DRAW-SPECIFIC METRICS", self.draw_audit_metrics_table),
+            ("DRAW CALIBRATION", self.draw_audit_calibration_table),
+            ("DRAW PERIOD AND COMPETITION", self.draw_audit_period_table),
         ]
         sections = []
         for title, table_or_label in tables:
@@ -4056,6 +4079,74 @@ class MainWindow(QMainWindow):
             return self._experiment_number(value, percent=True)
         def num(value):
             return self._experiment_number(value)
+        base_draw = baseline.get("draw_audit", {})
+        cand_draw = candidate.get("draw_audit", {})
+        draw_metric_rows = []
+        for label, key, formatter in (
+            ("Matches graded", "graded", lambda v: f"{int(v):,}" if v is not None else "—"),
+            ("Actual draw frequency", "observed_draw_rate", pct),
+            ("Mean predicted draw probability", "mean_predicted_draw_probability", pct),
+            ("Draw classification accuracy", "prediction_accuracy", pct),
+            ("Draw precision", "precision", pct),
+            ("Draw recall", "recall", pct),
+            ("Draw Brier score (calibrated)", "brier_score", num),
+            ("Draw log loss (calibrated)", "log_loss", num),
+            ("Draw Brier score (raw)", "raw_brier_score", num),
+            ("Draw log loss (raw)", "raw_log_loss", num),
+            ("True positives / false positives / false negatives", "confusion", str),
+        ):
+            left = (f"{base_draw.get('true_positives', 0)} / {base_draw.get('false_positives', 0)} / {base_draw.get('false_negatives', 0)}"
+                    if key == "confusion" else formatter(base_draw.get(key)))
+            right = (f"{cand_draw.get('true_positives', 0)} / {cand_draw.get('false_positives', 0)} / {cand_draw.get('false_negatives', 0)}"
+                     if key == "confusion" else formatter(cand_draw.get(key)))
+            draw_metric_rows.append([label, left, right])
+        self._fill_experiment_table(
+            self.draw_audit_metrics_table,
+            ["Draw-specific metric", "Fixed 25% baseline", "Goal-anchored candidate"],
+            draw_metric_rows,
+        )
+
+        base_bins = base_draw.get("calibration", [])
+        cand_bins = cand_draw.get("calibration", [])
+        draw_bin_rows = []
+        for index in range(max(len(base_bins), len(cand_bins))):
+            left = base_bins[index] if index < len(base_bins) else {}
+            right = cand_bins[index] if index < len(cand_bins) else {}
+            if not left.get("count") and not right.get("count"):
+                continue
+            draw_bin_rows.append([
+                left.get("range") or right.get("range") or "",
+                left.get("count", 0), pct(left.get("mean_probability")), pct(left.get("observed_rate")),
+                right.get("count", 0), pct(right.get("mean_probability")), pct(right.get("observed_rate")),
+                pct(right.get("signed_gap")),
+            ])
+        self._fill_experiment_table(
+            self.draw_audit_calibration_table,
+            ["Probability bin", "Baseline n", "Baseline avg p", "Baseline observed",
+             "Candidate n", "Candidate avg p", "Candidate observed", "Candidate gap"],
+            draw_bin_rows,
+        )
+
+        base_periods = {str(item.get("year")): item for item in base_draw.get("by_year", [])}
+        cand_periods = {str(item.get("year")): item for item in cand_draw.get("by_year", [])}
+        base_periods.update({item.get("competition_season"): item for item in base_draw.get("by_competition_season", [])})
+        cand_periods.update({item.get("competition_season"): item for item in cand_draw.get("by_competition_season", [])})
+        period_rows = []
+        for name in sorted(set(base_periods) | set(cand_periods)):
+            left, right = base_periods.get(name, {}), cand_periods.get(name, {})
+            gain = (float(left["brier_score"]) - float(right["brier_score"])
+                    if left.get("brier_score") is not None and right.get("brier_score") is not None else None)
+            period_rows.append([
+                name, left.get("matches", 0), pct(left.get("actual_draw_rate")), num(left.get("brier_score")), num(left.get("log_loss")),
+                right.get("matches", 0), pct(right.get("actual_draw_rate")), num(right.get("brier_score")), num(right.get("log_loss")), num(gain),
+            ])
+        self._fill_experiment_table(
+            self.draw_audit_period_table,
+            ["Period / competition-season", "Baseline n", "Baseline draw rate", "Baseline Brier", "Baseline log loss",
+             "Candidate n", "Candidate draw rate", "Candidate Brier", "Candidate log loss", "Brier improvement"],
+            period_rows,
+        )
+
         baseline_markets = baseline.get("by_market", {})
         candidate_markets = candidate.get("by_market", {})
         market_rows = []
