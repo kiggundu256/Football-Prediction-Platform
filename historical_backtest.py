@@ -11,6 +11,7 @@ from math import log, sqrt
 
 from model_ensemble import predict_ensemble
 from corners_engine import predict_corner_markets
+from recency_weighting import build_recency_weighted_profile
 
 
 def _team_key(name):
@@ -214,8 +215,19 @@ def _multiclass_calibration(samples, bin_count=10):
     return _calibration_bins(samples, bin_count)
 
 
-def run_historical_backtest(database_path, from_year=2020, minimum_history=5, max_matches=None):
+def _build_backtest_profile(history, strategy="baseline"):
+    """Select a profile builder for controlled walk-forward experiments."""
+    if strategy == "baseline":
+        return _profile(history)
+    if strategy == "recency_weighted":
+        return build_recency_weighted_profile(history, window=10, half_life_matches=5.0)
+    raise ValueError("Unknown profile strategy: %s" % strategy)
+
+
+def run_historical_backtest(database_path, from_year=2020, minimum_history=5, max_matches=None, profile_strategy="baseline"):
     """Run a chronological backtest against completed local historical matches."""
+    if profile_strategy not in ("baseline", "recency_weighted"):
+        raise ValueError("profile_strategy must be 'baseline' or 'recency_weighted'.")
     if int(minimum_history) < 1:
         raise ValueError("minimum_history must be at least one.")
     db = sqlite3.connect(str(database_path))
@@ -277,7 +289,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 skipped_insufficient_history += 1
                 continue
             home_history, away_history = histories[home_key], histories[away_key]
-            home_profile, away_profile = _profile(home_history), _profile(away_history)
+            home_profile = _build_backtest_profile(home_history, profile_strategy)
+            away_profile = _build_backtest_profile(away_history, profile_strategy)
             if (home_profile is None or away_profile is None
                     or home_profile["played"] < int(minimum_history)
                     or away_profile["played"] < int(minimum_history)):
@@ -678,6 +691,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
 
     return {
         "from_year": int(from_year), "minimum_history": int(minimum_history),
+        "profile_strategy": profile_strategy,
         "source_completed_matches": len(rows),
         "source_latest_match_date": source_latest_match_date,
         "live_calibration_profile": live_calibration_profile,
@@ -747,5 +761,88 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "prequential calibrators and smoothed market-specific event-rate baselines. Correct-score top-1 is benchmarked against "
             "prior competition score frequencies with add-one smoothing over an 11x11 score grid. No trained ML, odds, injuries, "
             "lineups, referee or weather inputs are used in this historical test. Raw and calibrated Brier scores are reported separately."
+        ),
+    }
+
+
+
+def run_profile_weighting_experiment(database_path, from_year=2020,
+                                     minimum_history=5, max_matches=None):
+    """Compare baseline and recency-weighted profiles on identical date-safe data.
+
+    Both strategies run through the same walk-forward evaluator, calibrators,
+    fixtures and scoring rules. A positive Brier/log-loss delta means the
+    recency-weighted candidate is better because lower scores are preferred.
+    """
+    baseline = run_historical_backtest(
+        database_path, from_year, minimum_history, max_matches,
+        profile_strategy="baseline",
+    )
+    candidate = run_historical_backtest(
+        database_path, from_year, minimum_history, max_matches,
+        profile_strategy="recency_weighted",
+    )
+
+    def metric_delta(key):
+        base_value = baseline.get(key)
+        candidate_value = candidate.get(key)
+        if base_value is None or candidate_value is None:
+            return None
+        return float(base_value) - float(candidate_value)
+
+    baseline_n = int(baseline.get("evaluated_matches") or 0)
+    candidate_n = int(candidate.get("evaluated_matches") or 0)
+    same_coverage = baseline_n == candidate_n
+    brier_gain = metric_delta("brier_score_1x2")
+    log_loss_gain = metric_delta("log_loss_1x2")
+    accuracy_gain = None
+    if baseline.get("accuracy_1x2") is not None and candidate.get("accuracy_1x2") is not None:
+        accuracy_gain = float(candidate["accuracy_1x2"]) - float(baseline["accuracy_1x2"])
+
+    # Do not promote on accuracy alone. Require both proper scoring rules to
+    # improve on identical evaluation coverage; this is an experiment gate,
+    # not a claim of statistical significance.
+    improves_both_scores = bool(
+        same_coverage and brier_gain is not None and log_loss_gain is not None
+        and brier_gain > 0 and log_loss_gain > 0
+    )
+    return {
+        "experiment": "baseline_vs_recency_weighted_team_profiles",
+        "from_year": int(from_year),
+        "minimum_history": int(minimum_history),
+        "same_evaluation_coverage": same_coverage,
+        "baseline": {
+            "evaluated_matches": baseline_n,
+            "accuracy_1x2": baseline.get("accuracy_1x2"),
+            "brier_score_1x2": baseline.get("brier_score_1x2"),
+            "log_loss_1x2": baseline.get("log_loss_1x2"),
+            "by_market": baseline.get("by_market", {}),
+        },
+        "recency_weighted": {
+            "evaluated_matches": candidate_n,
+            "accuracy_1x2": candidate.get("accuracy_1x2"),
+            "brier_score_1x2": candidate.get("brier_score_1x2"),
+            "log_loss_1x2": candidate.get("log_loss_1x2"),
+            "by_market": candidate.get("by_market", {}),
+        },
+        "delta_candidate_minus_baseline": {
+            "accuracy_1x2": accuracy_gain,
+            "brier_improvement": brier_gain,
+            "log_loss_improvement": log_loss_gain,
+        },
+        "recommendation": (
+            "Candidate improves both Brier score and log loss on identical coverage; "
+            "review competition and market breakdowns before promotion."
+            if improves_both_scores else
+            "Do not promote. The candidate has not demonstrated improvement on both "
+            "Brier score and log loss with identical evaluation coverage."
+        ),
+        "promotion_gate_passed": improves_both_scores,
+        "methodology": (
+            "Two independent chronological walk-forward runs over the same local "
+            "completed-match dataset. Same-day outcomes are withheld until every "
+            "forecast for that date is generated. Each strategy calibrates only "
+            "from its own prior out-of-sample predictions. Production predictions "
+            "remain unchanged."
         ),
     }
