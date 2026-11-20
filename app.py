@@ -3662,6 +3662,51 @@ class MainWindow(QMainWindow):
             "color:#C7D7EF;padding:10px;background:#111D30;border:1px solid #26364D;border-radius:7px"
         )
         box.addWidget(self.draw_experiment_result)
+
+        draw_detail_title = QLabel("Draw experiment — baseline vs candidate diagnostics")
+        draw_detail_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
+        box.addWidget(draw_detail_title)
+        draw_detail_note = QLabel(
+            "These tables belong to the draw-formula experiment above (not the separate historical backtest). "
+            "They compare both strategies on the same evaluated fixtures. Empty bins are omitted."
+        )
+        draw_detail_note.setWordWrap(True)
+        box.addWidget(draw_detail_note)
+
+        self.draw_market_table = QTableWidget(0, 10)
+        self.draw_market_table.setHorizontalHeaderLabels([
+            "Market / event", "Graded", "Baseline accuracy", "Candidate accuracy",
+            "Baseline observed rate", "Candidate observed rate",
+            "Baseline calibrated Brier", "Candidate calibrated Brier",
+            "Baseline raw Brier", "Candidate raw Brier"
+        ])
+        self.draw_calibration_table = QTableWidget(0, 11)
+        self.draw_calibration_table.setHorizontalHeaderLabels([
+            "Market / event", "Probability set", "Confidence range", "Baseline n",
+            "Baseline avg probability", "Baseline observed rate", "Baseline gap",
+            "Candidate n", "Candidate avg probability", "Candidate observed rate", "Candidate gap"
+        ])
+        self.draw_comp_table = QTableWidget(0, 8)
+        self.draw_comp_table.setHorizontalHeaderLabels([
+            "Competition / season", "Baseline matches", "Candidate matches",
+            "Baseline accuracy", "Candidate accuracy", "Baseline Brier",
+            "Candidate Brier", "Brier improvement"
+        ])
+        for table in (self.draw_market_table, self.draw_calibration_table, self.draw_comp_table):
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+            table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+            table.setMaximumHeight(260)
+            table.horizontalHeader().setStretchLastSection(True)
+            box.addWidget(table)
+
+        draw_copy_row = QHBoxLayout()
+        self.draw_details_copy_button = QPushButton("Copy All Draw Experiment Details")
+        self.draw_details_copy_button.clicked.connect(self.copy_draw_experiment_details)
+        draw_copy_row.addWidget(self.draw_details_copy_button)
+        draw_copy_row.addStretch()
+        box.addLayout(draw_copy_row)
+
         backtest_cards = QGridLayout()
         self.backtest_source_card = Card("COMPLETED SOURCE MATCHES", "—", "From selected start year")
         self.backtest_evaluated_card = Card("MATCHES EVALUATED", "—", "Enough prior team history")
@@ -3902,6 +3947,55 @@ class MainWindow(QMainWindow):
             "This is an isolated experiment. Production predictions have not been changed."
         )
 
+    @staticmethod
+    def _fill_experiment_table(table, headers, rows):
+        table.setRowCount(len(rows))
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        for row_index, values in enumerate(rows):
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem("" if value is None else str(value))
+                table.setItem(row_index, column_index, item)
+        table.resizeColumnsToContents()
+
+    @staticmethod
+    def _experiment_number(value, digits=4, percent=False):
+        if value is None:
+            return "—"
+        number = float(value)
+        return f"{number:.1%}" if percent else f"{number:.{digits}f}"
+
+    def copy_draw_experiment_details(self):
+        tables = [
+            ("SUMMARY", self.draw_experiment_result),
+            ("MARKET COMPARISON", self.draw_market_table),
+            ("CALIBRATION COMPARISON", self.draw_calibration_table),
+            ("COMPETITION / SEASON COMPARISON", self.draw_comp_table),
+        ]
+        sections = []
+        for title, table_or_label in tables:
+            if isinstance(table_or_label, QLabel):
+                sections.append(title + "\n" + table_or_label.text())
+                continue
+            headers = [
+                table_or_label.horizontalHeaderItem(i).text()
+                if table_or_label.horizontalHeaderItem(i) else ""
+                for i in range(table_or_label.columnCount())
+            ]
+            lines = ["\t".join(headers)]
+            for row in range(table_or_label.rowCount()):
+                lines.append("\t".join(
+                    table_or_label.item(row, col).text()
+                    if table_or_label.item(row, col) else ""
+                    for col in range(table_or_label.columnCount())
+                ))
+            sections.append(title + "\n" + "\n".join(lines))
+        QApplication.clipboard().setText("\n\n".join(sections))
+        QMessageBox.information(
+            self, "Draw experiment copied",
+            "The summary and all three comparison tables have been copied. Paste the results into this chat."
+        )
+
     def run_draw_probability_experiment_ui(self):
         if getattr(self, "draw_experiment_worker", None) and self.draw_experiment_worker.isRunning():
             return
@@ -3956,6 +4050,85 @@ class MainWindow(QMainWindow):
             f"Promotion gate: {'PASSED — review market/competition breakdowns before any promotion' if result.get('promotion_gate_passed') else 'NOT PASSED — keep current production formula'}\\n"
             f"{result.get('recommendation', '')}\\n"
             "Isolated formula audit only. Production predictions have not been changed."
+        )
+
+        def pct(value):
+            return self._experiment_number(value, percent=True)
+        def num(value):
+            return self._experiment_number(value)
+        baseline_markets = baseline.get("by_market", {})
+        candidate_markets = candidate.get("by_market", {})
+        market_rows = []
+        for name in sorted(set(baseline_markets) | set(candidate_markets)):
+            left, right = baseline_markets.get(name, {}), candidate_markets.get(name, {})
+            market_rows.append([
+                name, left.get("graded", 0), pct(left.get("selection_accuracy", left.get("accuracy"))),
+                pct(right.get("selection_accuracy", right.get("accuracy"))),
+                pct(left.get("observed_event_rate")), pct(right.get("observed_event_rate")),
+                num(left.get("brier_score")), num(right.get("brier_score")),
+                num(left.get("raw_brier_score")), num(right.get("raw_brier_score")),
+            ])
+        self._fill_experiment_table(
+            self.draw_market_table, [
+                "Market / event", "Graded", "Baseline accuracy", "Candidate accuracy",
+                "Baseline observed rate", "Candidate observed rate",
+                "Baseline calibrated Brier", "Candidate calibrated Brier",
+                "Baseline raw Brier", "Candidate raw Brier"
+            ], market_rows
+        )
+
+        calibration_rows = []
+        base_cal = baseline.get("calibration_by_market", {})
+        cand_cal = candidate.get("calibration_by_market", {})
+        for market in sorted(set(base_cal) | set(cand_cal)):
+            base_bins, cand_bins = base_cal.get(market, []), cand_cal.get(market, [])
+            for index in range(max(len(base_bins), len(cand_bins))):
+                left = base_bins[index] if index < len(base_bins) else {}
+                right = cand_bins[index] if index < len(cand_bins) else {}
+                if not left.get("count") and not right.get("count"):
+                    continue
+                calibration_rows.append([
+                    market, "Calibrated", left.get("range") or right.get("range") or "",
+                    left.get("count", 0), pct(left.get("mean_probability")),
+                    pct(left.get("observed_rate")), pct(left.get("signed_gap")),
+                    right.get("count", 0), pct(right.get("mean_probability")),
+                    pct(right.get("observed_rate")), pct(right.get("signed_gap")),
+                ])
+        self._fill_experiment_table(
+            self.draw_calibration_table, [
+                "Market / event", "Probability set", "Confidence range", "Baseline n",
+                "Baseline avg probability", "Baseline observed rate", "Baseline gap",
+                "Candidate n", "Candidate avg probability", "Candidate observed rate", "Candidate gap"
+            ], calibration_rows
+        )
+
+        base_comps = {
+            item.get("competition_season"): item
+            for item in baseline.get("by_competition_season", [])
+        }
+        cand_comps = {
+            item.get("competition_season"): item
+            for item in candidate.get("by_competition_season", [])
+        }
+        competition_rows = []
+        for name in sorted(set(base_comps) | set(cand_comps)):
+            left, right = base_comps.get(name, {}), cand_comps.get(name, {})
+            brier_gain = (
+                float(left["brier_score"]) - float(right["brier_score"])
+                if left.get("brier_score") is not None and right.get("brier_score") is not None
+                else None
+            )
+            competition_rows.append([
+                name, left.get("matches", 0), right.get("matches", 0),
+                pct(left.get("accuracy")), pct(right.get("accuracy")),
+                num(left.get("brier_score")), num(right.get("brier_score")), num(brier_gain),
+            ])
+        self._fill_experiment_table(
+            self.draw_comp_table, [
+                "Competition / season", "Baseline matches", "Candidate matches",
+                "Baseline accuracy", "Candidate accuracy", "Baseline Brier",
+                "Candidate Brier", "Brier improvement"
+            ], competition_rows
         )
 
     def copy_historical_backtest_summary(self):
