@@ -266,6 +266,17 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertEqual(result["goal_anchored"]["evaluated_matches"], 2)
         self.assertIn("Production predictions remain unchanged", result["methodology"])
         self.assertIn("brier_improvement", result["delta_candidate_minus_baseline"])
+        for strategy in ("baseline", "goal_anchored"):
+            audit = result[strategy]["draw_audit"]
+            self.assertEqual(audit["graded"], 2)
+            self.assertIn("precision", audit)
+            self.assertIn("recall", audit)
+            self.assertIn("brier_score", audit)
+            self.assertIn("log_loss", audit)
+            self.assertEqual(sum(item["count"] for item in audit["calibration"]), 2)
+            self.assertEqual(sum(item["matches"] for item in audit["by_year"]), 2)
+            self.assertEqual(sum(item["matches"] for item in audit["by_competition_season"]), 2)
+            self.assertIn("same-day results are withheld", audit["leakage_control"])
 
     def test_backtest_rejects_unknown_draw_strategy(self):
         with self.assertRaises(ValueError):
