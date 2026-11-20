@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from historical_backtest import (
@@ -256,6 +257,59 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIsNone(bins[1]["observed_rate_upper_95"])
         self.assertFalse(bins[0]["overconfident"])
         self.assertFalse(bins[-1]["overconfident"])
+
+    @patch("historical_backtest.run_historical_backtest")
+    def test_draw_promotion_gate_rejects_worse_draw_scores_even_if_1x2_improves(self, mocked_run):
+        baseline = {
+            "evaluated_matches": 50,
+            "accuracy_1x2": 0.48,
+            "brier_score_1x2": 0.21,
+            "log_loss_1x2": 1.00,
+            "draw_audit": {"brier_score": 0.18, "log_loss": 0.55},
+        }
+        candidate = {
+            "evaluated_matches": 50,
+            "accuracy_1x2": 0.49,
+            "brier_score_1x2": 0.20,
+            "log_loss_1x2": 0.99,
+            "draw_audit": {"brier_score": 0.19, "log_loss": 0.54},
+        }
+        mocked_run.side_effect = [baseline, candidate]
+
+        result = run_draw_probability_experiment(self.path, from_year=2020, minimum_history=5)
+
+        self.assertFalse(result["promotion_gate_passed"])
+        self.assertAlmostEqual(
+            result["delta_candidate_minus_baseline"]["draw_brier_improvement"], -0.01
+        )
+        self.assertAlmostEqual(
+            result["delta_candidate_minus_baseline"]["draw_log_loss_improvement"], 0.01
+        )
+        self.assertIn("draw-specific", result["recommendation"])
+
+    @patch("historical_backtest.run_historical_backtest")
+    def test_draw_promotion_gate_requires_both_draw_scores_to_improve(self, mocked_run):
+        baseline = {
+            "evaluated_matches": 50,
+            "accuracy_1x2": 0.48,
+            "brier_score_1x2": 0.21,
+            "log_loss_1x2": 1.00,
+            "draw_audit": {"brier_score": 0.18, "log_loss": 0.55},
+        }
+        candidate = {
+            "evaluated_matches": 50,
+            "accuracy_1x2": 0.49,
+            "brier_score_1x2": 0.20,
+            "log_loss_1x2": 0.99,
+            "draw_audit": {"brier_score": 0.17, "log_loss": 0.54},
+        }
+        mocked_run.side_effect = [baseline, candidate]
+
+        result = run_draw_probability_experiment(self.path, from_year=2020, minimum_history=5)
+
+        self.assertTrue(result["promotion_gate_passed"])
+        self.assertGreater(result["delta_candidate_minus_baseline"]["draw_brier_improvement"], 0)
+        self.assertGreater(result["delta_candidate_minus_baseline"]["draw_log_loss_improvement"], 0)
 
     def test_draw_probability_experiment_preserves_identical_coverage(self):
         result = run_draw_probability_experiment(

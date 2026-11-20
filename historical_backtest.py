@@ -940,14 +940,28 @@ def run_draw_probability_experiment(database_path, from_year=2020,
 
     brier_gain = gain("brier_score_1x2")
     log_loss_gain = gain("log_loss_1x2")
+    baseline_draw = baseline.get("draw_audit") or {}
+    candidate_draw = candidate.get("draw_audit") or {}
+
+    def draw_gain(key):
+        left, right = baseline_draw.get(key), candidate_draw.get(key)
+        return float(left) - float(right) if left is not None and right is not None else None
+
+    draw_brier_gain = draw_gain("brier_score")
+    draw_log_loss_gain = draw_gain("log_loss")
     accuracy_change = (
         float(candidate["accuracy_1x2"]) - float(baseline["accuracy_1x2"])
         if baseline.get("accuracy_1x2") is not None and candidate.get("accuracy_1x2") is not None
         else None
     )
+    # A draw-formula candidate must improve both the full 1X2 forecast and
+    # the draw event itself. Overall scores alone can hide worse draw forecasts.
     passed = bool(
-        same_coverage and brier_gain is not None and log_loss_gain is not None
+        same_coverage
+        and brier_gain is not None and log_loss_gain is not None
+        and draw_brier_gain is not None and draw_log_loss_gain is not None
         and brier_gain > 0 and log_loss_gain > 0
+        and draw_brier_gain > 0 and draw_log_loss_gain > 0
     )
     return {
         "experiment": "fixed_draw_prior_vs_goal_anchored_draw",
@@ -978,13 +992,15 @@ def run_draw_probability_experiment(database_path, from_year=2020,
             "accuracy_1x2": accuracy_change,
             "brier_improvement": brier_gain,
             "log_loss_improvement": log_loss_gain,
+            "draw_brier_improvement": draw_brier_gain,
+            "draw_log_loss_improvement": draw_log_loss_gain,
         },
         "promotion_gate_passed": passed,
         "recommendation": (
-            "Candidate improves both Brier score and log loss on identical coverage; "
-            "review calibration and competition breakdowns before promotion."
+            "Candidate improves overall 1X2 and draw-specific Brier score and log loss "
+            "on identical coverage; review calibration and competition breakdowns before promotion."
             if passed else
-            "Do not promote. The goal-anchored draw candidate has not improved both "
+            "Do not promote. The candidate must improve both overall 1X2 and draw-specific "
             "Brier score and log loss on identical evaluation coverage."
         ),
         "methodology": (
