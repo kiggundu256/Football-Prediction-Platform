@@ -3665,9 +3665,9 @@ class MainWindow(QMainWindow):
 
         self.draw_audit_metrics_table = QTableWidget(0, 3)
         self.draw_audit_metrics_table.setHorizontalHeaderLabels(["Draw-specific metric", "Fixed 25% baseline", "Goal-anchored candidate"])
-        self.draw_audit_calibration_table = QTableWidget(0, 8)
+        self.draw_audit_calibration_table = QTableWidget(0, 9)
         self.draw_audit_calibration_table.setHorizontalHeaderLabels([
-            "Probability bin", "Baseline n", "Baseline avg p", "Baseline observed",
+            "Probability bin", "Baseline n", "Baseline avg p", "Baseline observed", "Baseline gap",
             "Candidate n", "Candidate avg p", "Candidate observed", "Candidate gap"
         ])
         self.draw_audit_period_table = QTableWidget(0, 10)
@@ -4116,13 +4116,13 @@ class MainWindow(QMainWindow):
                 continue
             draw_bin_rows.append([
                 left.get("range") or right.get("range") or "",
-                left.get("count", 0), pct(left.get("mean_probability")), pct(left.get("observed_rate")),
+                left.get("count", 0), pct(left.get("mean_probability")), pct(left.get("observed_rate")), pct(left.get("signed_gap")),
                 right.get("count", 0), pct(right.get("mean_probability")), pct(right.get("observed_rate")),
                 pct(right.get("signed_gap")),
             ])
         self._fill_experiment_table(
             self.draw_audit_calibration_table,
-            ["Probability bin", "Baseline n", "Baseline avg p", "Baseline observed",
+            ["Probability bin", "Baseline n", "Baseline avg p", "Baseline observed", "Baseline gap",
              "Candidate n", "Candidate avg p", "Candidate observed", "Candidate gap"],
             draw_bin_rows,
         )
