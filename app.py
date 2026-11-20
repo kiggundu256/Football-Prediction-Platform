@@ -34,7 +34,10 @@ from head_to_head import summarize_head_to_head
 from ui_theme import APP_STYLESHEET
 from settlement import settle_markets
 from performance_metrics import summarize_performance
-from historical_backtest import run_historical_backtest, run_profile_weighting_experiment
+from historical_backtest import (
+    run_historical_backtest, run_profile_weighting_experiment,
+    run_draw_probability_experiment,
+)
 from probability_calibration import apply_live_calibration
 from fixture_view import filter_fixtures, competition_options, fixture_status_group
 from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
@@ -334,6 +337,28 @@ class ProfileWeightingExperimentWorker(QThread):
     def run(self):
         try:
             result = run_profile_weighting_experiment(
+                self.database_path,
+                from_year=self.from_year,
+                minimum_history=self.minimum_history,
+            )
+            self.completed.emit(result)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class DrawProbabilityExperimentWorker(QThread):
+    completed = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, database_path, from_year, minimum_history):
+        super().__init__()
+        self.database_path = database_path
+        self.from_year = from_year
+        self.minimum_history = minimum_history
+
+    def run(self):
+        try:
+            result = run_draw_probability_experiment(
                 self.database_path,
                 from_year=self.from_year,
                 minimum_history=self.minimum_history,
@@ -3625,6 +3650,18 @@ class MainWindow(QMainWindow):
             "color:#C7D7EF;padding:10px;background:#111D30;border:1px solid #26364D;border-radius:7px"
         )
         box.addWidget(self.profile_experiment_result)
+        self.draw_experiment_button = QPushButton("Audit Fixed Draw Probability vs Goal-Anchored Draw")
+        self.draw_experiment_button.clicked.connect(self.run_draw_probability_experiment_ui)
+        box.addWidget(self.draw_experiment_button)
+        self.draw_experiment_result = QLabel(
+            "Draw-formula audit not run. This tests the fixed 25% draw prior against the "
+            "goal-distribution draw probability without changing production predictions."
+        )
+        self.draw_experiment_result.setWordWrap(True)
+        self.draw_experiment_result.setStyleSheet(
+            "color:#C7D7EF;padding:10px;background:#111D30;border:1px solid #26364D;border-radius:7px"
+        )
+        box.addWidget(self.draw_experiment_result)
         backtest_cards = QGridLayout()
         self.backtest_source_card = Card("COMPLETED SOURCE MATCHES", "—", "From selected start year")
         self.backtest_evaluated_card = Card("MATCHES EVALUATED", "—", "Enough prior team history")
@@ -3863,6 +3900,62 @@ class MainWindow(QMainWindow):
             f"Promotion gate: {'PASSED — review market/competition breakdowns before any promotion' if result.get('promotion_gate_passed') else 'NOT PASSED — keep the current production profile'}\\n"
             f"{result.get('recommendation', '')}\\n"
             "This is an isolated experiment. Production predictions have not been changed."
+        )
+
+    def run_draw_probability_experiment_ui(self):
+        if getattr(self, "draw_experiment_worker", None) and self.draw_experiment_worker.isRunning():
+            return
+        self.draw_experiment_button.setEnabled(False)
+        self.draw_experiment_result.setText(
+            "Formula audit running: fixed-draw and goal-anchored candidates are being "
+            "evaluated on identical chronological fixtures. The app remains responsive."
+        )
+        self.draw_experiment_worker = DrawProbabilityExperimentWorker(
+            self.store.path,
+            self.backtest_from_year.value(),
+            self.backtest_min_history.value(),
+        )
+        self.draw_experiment_worker.completed.connect(self.display_draw_probability_experiment)
+        self.draw_experiment_worker.failed.connect(self.draw_probability_experiment_failed)
+        self.draw_experiment_worker.finished.connect(
+            lambda: self.draw_experiment_button.setEnabled(True)
+        )
+        self.draw_experiment_worker.start()
+
+    def draw_probability_experiment_failed(self, message):
+        self.draw_experiment_result.setText("Draw-probability experiment failed: " + message)
+        QMessageBox.warning(self, "Draw-probability experiment", message)
+
+    def display_draw_probability_experiment(self, result):
+        baseline = result.get("baseline", {})
+        candidate = result.get("goal_anchored", {})
+        delta = result.get("delta_candidate_minus_baseline", {})
+        def metric(value, digits=4):
+            return f"{float(value):.{digits}f}" if value is not None else "—"
+        def percent(value):
+            return f"{float(value):.1%}" if value is not None else "—"
+        coverage = (
+            "Same evaluation coverage." if result.get("same_evaluation_coverage")
+            else "WARNING: evaluation coverage differs; do not compare these scores."
+        )
+        self.draw_experiment_result.setText(
+            "FIXED 25% DRAW vs GOAL-ANCHORED DRAW EXPERIMENT\\n"
+            f"Period: {result.get('from_year')}+ | Minimum prior matches/team: "
+            f"{result.get('minimum_history')}\\n"
+            f"Evaluated matches: baseline {baseline.get('evaluated_matches', 0):,} | "
+            f"candidate {candidate.get('evaluated_matches', 0):,} | {coverage}\\n"
+            f"1X2 accuracy: {percent(baseline.get('accuracy_1x2'))} → "
+            f"{percent(candidate.get('accuracy_1x2'))} "
+            f"(candidate change {percent(delta.get('accuracy_1x2')) if delta.get('accuracy_1x2') is not None else '—'})\\n"
+            f"Brier score: {metric(baseline.get('brier_score_1x2'))} → "
+            f"{metric(candidate.get('brier_score_1x2'))} "
+            f"(improvement {metric(delta.get('brier_improvement'))})\\n"
+            f"Log loss: {metric(baseline.get('log_loss_1x2'))} → "
+            f"{metric(candidate.get('log_loss_1x2'))} "
+            f"(improvement {metric(delta.get('log_loss_improvement'))})\\n"
+            f"Promotion gate: {'PASSED — review market/competition breakdowns before any promotion' if result.get('promotion_gate_passed') else 'NOT PASSED — keep current production formula'}\\n"
+            f"{result.get('recommendation', '')}\\n"
+            "Isolated formula audit only. Production predictions have not been changed."
         )
 
     def copy_historical_backtest_summary(self):
