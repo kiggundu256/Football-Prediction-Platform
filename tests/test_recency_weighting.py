@@ -2,6 +2,7 @@ import unittest
 from math import isclose
 
 from recency_weighting import build_recency_weighted_profile
+from historical_backtest import _build_backtest_profile
 
 
 class RecencyWeightedProfileTests(unittest.TestCase):
@@ -37,6 +38,20 @@ class RecencyWeightedProfileTests(unittest.TestCase):
         self.assertTrue(isclose(
             profile["wins"] + profile["draws"] + profile["losses"], 3.0
         ))
+
+    def test_backtest_profile_strategy_keeps_baseline_and_exposes_candidate(self):
+        history = [
+            {"scored": 0, "conceded": 2},
+            {"scored": 4, "conceded": 0},
+        ]
+        baseline = _build_backtest_profile(history, "baseline")
+        candidate = _build_backtest_profile(history, "recency_weighted")
+        self.assertEqual(baseline["scored_avg"], 2.0)
+        self.assertGreater(candidate["scored_avg"], baseline["scored_avg"])
+
+    def test_backtest_rejects_unknown_profile_strategy(self):
+        with self.assertRaises(ValueError):
+            _build_backtest_profile([], "unknown")
 
     def test_empty_history_returns_none(self):
         self.assertIsNone(build_recency_weighted_profile([]))
