@@ -3945,10 +3945,10 @@ class MainWindow(QMainWindow):
         )
         ml_audit = result.get("ml_walk_forward", {})
         ml_status = (
-            f" AI walk-forward: {ml_audit.get('evaluated_matches', 0):,} common matches; "
+            f" AI walk-forward: {ml_audit.get('common_fixture_count', ml_audit.get('evaluated_matches', 0)):,} common fixtures; "
             f"{ml_audit.get('training_examples_used', 0):,} training examples; "
             f"{ml_audit.get('retraining_events', 0)} model fits. {ml_audit.get('status', 'Not run')}. "
-            "See the three AI audit rows below; their scores use raw probabilities on identical fixtures."
+            "The three explicitly named AI audit rows below share this exact fixture count; compare them with one another, not the general Ensemble row."
         )
         self.backtest_status.setText(
             f"Completed: {result['evaluated_matches']:,} historical matches evaluated from {result['from_year']} onward. "
