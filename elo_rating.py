@@ -42,3 +42,42 @@ class EloRatingSystem:
 
     def snapshot(self):
         return dict(self._ratings)
+
+
+def build_pre_match_elo_ratings(database_path, before_date, competition,
+                                home_team, away_team, initial_rating=1500.0):
+    """Rebuild competition Elo strictly before a fixture date from local history."""
+    import sqlite3
+    from functools import lru_cache
+
+    @lru_cache(maxsize=128)
+    def _build(path, cutoff, competition_name, initial):
+        system = EloRatingSystem(initial_rating=initial)
+        db = sqlite3.connect(path)
+        try:
+            rows = db.execute("""
+                SELECT home_team, away_team, home_goals, away_goals
+                FROM historical_matches
+                WHERE match_date < ?
+                  AND lower(trim(COALESCE(competition,''))) = lower(trim(?))
+                  AND status IN ('FT','AET','PEN')
+                  AND home_goals IS NOT NULL AND away_goals IS NOT NULL
+                  AND trim(COALESCE(home_team,'')) <> ''
+                  AND trim(COALESCE(away_team,'')) <> ''
+                ORDER BY match_date ASC, fixture_id ASC
+            """, (cutoff, competition_name)).fetchall()
+        finally:
+            db.close()
+        for home, away, hg, ag in rows:
+            system.update(competition_name, home, away, int(hg), int(ag))
+        return system.snapshot()
+
+    snapshot = _build(str(database_path), str(before_date or "9999-12-31"),
+                      str(competition or "Unknown"), float(initial_rating))
+    home_key = EloRatingSystem._key(competition, home_team)
+    away_key = EloRatingSystem._key(competition, away_team)
+    return {
+        "home": snapshot.get(home_key, float(initial_rating)),
+        "away": snapshot.get(away_key, float(initial_rating)),
+        "matches_used": len(snapshot),
+    }
