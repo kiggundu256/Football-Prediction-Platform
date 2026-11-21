@@ -26,7 +26,7 @@ from api_football import (
 )
 from corners_engine import predict_corner_markets
 from model_ensemble import predict_ensemble
-from machine_learning import build_model_features, train_outcome_model, predict_outcome
+from machine_learning import build_model_features, build_historical_training_rows, train_outcome_model, predict_outcome
 from fixture_intelligence import summarize_injuries, summarize_lineups
 from weather_client import fetch_match_weather
 from analysis_explainer import team_profile, build_analysis_explanation
@@ -263,7 +263,12 @@ class Store:
                 (cache_key, json.dumps(data), datetime.now(timezone.utc).isoformat()))
 
     def training_records(self):
-        """Return settled historical prediction features for optional local ML training."""
+        """Train from imported historical matches; fall back to verified settled forecasts."""
+        historical_rows = build_historical_training_rows(
+            self.path, from_year=2020, minimum_history=5, max_samples=4000
+        )
+        if len(historical_rows) >= 200:
+            return historical_rows
         with self.connect() as db:
             return db.execute("""SELECT features_json, actual_home_goals, actual_away_goals
                 FROM prediction_runs WHERE is_demo = 0 AND result_status = 'settled'
@@ -341,6 +346,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.resize(1100, 740)
         self.store = Store()
+        self._local_ml_model_cache = None
+        self._local_ml_model_cache_loaded = False
         self.historical_db = HistoricalDatabase(self.store.path)
         self.csv_importer = HistoricalCsvImporter(self.store.path)
         self.reconciliation_db = HistoricalReconciliation(self.store.path)
@@ -2839,7 +2846,10 @@ class MainWindow(QMainWindow):
                 scan_context["training_loaded"] = True
             local_ml = scan_context["training_model"]
         else:
-            local_ml = train_outcome_model(self.store.training_records())
+            if not self._local_ml_model_cache_loaded:
+                self._local_ml_model_cache = train_outcome_model(self.store.training_records())
+                self._local_ml_model_cache_loaded = True
+            local_ml = self._local_ml_model_cache
         ml_probabilities = predict_outcome(local_ml, model_features) if local_ml else None
         injuries_data = self.store.get_provider_cache(f"injuries:{selected_fixture_id}", 30 * 60)
         lineups_data = self.store.get_provider_cache(f"lineups:{selected_fixture_id}", 10 * 60)
