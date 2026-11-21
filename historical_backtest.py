@@ -11,6 +11,7 @@ from math import log, sqrt
 
 from model_ensemble import predict_ensemble
 from corners_engine import predict_corner_markets
+from machine_learning import build_model_features, predict_outcome, train_outcome_model
 
 
 def _team_key(name):
@@ -243,6 +244,13 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     })
     market_stats = {}
     model_comparison = {}
+    ml_training_rows = []
+    ml_total_training_examples = 0
+    ml_last_training_total = 0
+    ml_model = None
+    ml_retrain_count = 0
+    ml_evaluated = 0
+    ml_component_names = ("AI audit: Production baseline (raw)", "AI audit: Trained ML only (raw)", "AI audit: ML-assisted ensemble (raw)")
     calibration_samples = defaultdict(list)
     raw_calibration_samples = defaultdict(list)
     # Running raw-probability-bin counts avoid rescanning every prior match.
@@ -270,6 +278,12 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     # Grouping by date ensures a fixture cannot use another result from the same day.
     for match_date in sorted(daily_groups):
         day_rows = daily_groups[match_date]
+        if ml_total_training_examples >= 200 and (ml_model is None or ml_total_training_examples - ml_last_training_total >= 2000):
+            ml_model = train_outcome_model(ml_training_rows, minimum_samples=200, epochs=40)
+            if ml_model:
+                ml_last_training_total = ml_total_training_examples
+                ml_retrain_count += 1
+        pending_ml_training_rows = []
         pending_market_calibration = defaultdict(list)
         for row in day_rows:
             home_key, away_key = _team_key(row["home_team"]), _team_key(row["away_team"])
@@ -292,6 +306,35 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
 
             markets = forecast["markets"]
             actual_home, actual_away = int(row["home_goals"]), int(row["away_goals"])
+            ml_features = build_model_features(home_profile, away_profile, forecast["home_xg"], forecast["away_xg"])
+            pending_ml_training_rows.append((json.dumps(ml_features, sort_keys=True), actual_home, actual_away))
+            if ml_model:
+                ml_probabilities = predict_outcome(ml_model, ml_features)
+                goal_probs = forecast["goal_model"]
+                form_probs = forecast["form_model"]
+                ml_keys = ("home_win", "draw", "away_win")
+                production_probs = {key: 0.75 * float(goal_probs[key]) + 0.25 * float(form_probs[key]) for key in ml_keys}
+                hybrid_probs = {key: 0.60 * float(goal_probs[key]) + 0.20 * float(form_probs[key]) + 0.20 * float(ml_probabilities[key]) for key in ml_keys}
+                actual_index = 0 if actual_home > actual_away else (2 if actual_home < actual_away else 1)
+                actual_vector = [1.0 if index == actual_index else 0.0 for index in range(3)]
+                candidate_models = {
+                    ml_component_names[0]: production_probs,
+                    ml_component_names[1]: ml_probabilities,
+                    ml_component_names[2]: hybrid_probs,
+                }
+                for candidate_name, candidate in candidate_models.items():
+                    values = [max(1e-12, float(candidate[key])) for key in ml_keys]
+                    total = sum(values)
+                    values = [value / total for value in values]
+                    predicted = max(range(3), key=lambda index: values[index])
+                    brier = sum((values[index] - actual_vector[index]) ** 2 for index in range(3)) / 3.0
+                    loss = -log(max(values[actual_index], 1e-15))
+                    stats = model_comparison.setdefault(candidate_name, {"matches": 0, "correct": 0, "brier_sum": 0.0, "log_loss_sum": 0.0})
+                    stats["matches"] += 1
+                    stats["correct"] += int(predicted == actual_index)
+                    stats["brier_sum"] += brier
+                    stats["log_loss_sum"] += loss
+                ml_evaluated += 1
 
             def record_binary_market(name, raw_probability, actual_event):
                 raw_p = max(0.0, min(1.0, float(raw_probability)))
@@ -538,6 +581,11 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                     add_baseline_event(f"{prefix} Over {line}", actual_over)
                     add_baseline_event(f"{prefix} Under {line}", not actual_over)
 
+        ml_training_rows.extend(pending_ml_training_rows)
+        ml_total_training_examples += len(pending_ml_training_rows)
+        if len(ml_training_rows) > 4000:
+            ml_training_rows = ml_training_rows[-4000:]
+
         # Only results from the completed date become available to later dates.
         for row in day_rows:
             league_key = (str(row["country"] or ""), str(row["competition"] or ""))
@@ -736,6 +784,17 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "brier_score": item["brier_sum"] / item["matches"] if item["matches"] else None,
             "log_loss": item["log_loss_sum"] / item["matches"] if item["matches"] else None,
         } for name, item in sorted(model_comparison.items())],
+        "ml_walk_forward": {
+            "status": "Evaluated" if ml_evaluated else "Insufficient prior training history",
+            "training_examples_available_at_end": ml_total_training_examples,
+            "training_examples_used": int(ml_model["samples"]) if ml_model else 0,
+            "training_class_counts": ml_model.get("class_counts", {}) if ml_model else {},
+            "retraining_events": ml_retrain_count,
+            "evaluated_matches": ml_evaluated,
+            "retraining_policy": "Initial fit after 200 prior-date examples; refit after each additional 2,000 examples; maximum 4,000 most recent examples; 40 epochs.",
+            "leakage_control": "The model is frozen for each calendar date; that date's labels enter training only after all same-day forecasts are complete.",
+            "comparison": "Production 75/25 Poisson-form blend, ML alone, and current 60/20/20 Poisson-form-ML blend are scored on identical ML-active fixtures using raw probabilities.",
+        },
         "by_market": _finalize_market_stats(market_stats),
         "by_competition_season": groups,
         "methodology": (
@@ -746,6 +805,6 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "competition-level outcome-rate baseline using prior results only. Binary goals, BTTS and corner markets use separate "
             "prequential calibrators and smoothed market-specific event-rate baselines. Correct-score top-1 is benchmarked against "
             "prior competition score frequencies with add-one smoothing over an 11x11 score grid. No trained ML, odds, injuries, "
-            "lineups, referee or weather inputs are used in this historical test. Raw and calibrated Brier scores are reported separately."
+            "lineups, referee or weather inputs are used in the existing-market test. A separate leakage-safe ML walk-forward audit compares the production 75/25 Poisson-form blend, ML alone, and the 60/20/20 ML-assisted blend on identical ML-active fixtures using raw probabilities. Raw and calibrated Brier scores are reported separately."
         ),
     }
