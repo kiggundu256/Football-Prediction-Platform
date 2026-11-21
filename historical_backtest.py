@@ -244,13 +244,17 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     })
     market_stats = {}
     model_comparison = {}
+    ml_component_names = ("AI audit: Production baseline (raw)", "AI audit: Trained ML only (raw)", "AI audit: ML-assisted ensemble (raw)")
+    ml_audit_stats = {
+        name: {"matches": 0, "correct": 0, "brier_sum": 0.0, "log_loss_sum": 0.0}
+        for name in ml_component_names
+    }
     ml_training_rows = []
     ml_total_training_examples = 0
     ml_last_training_total = 0
     ml_model = None
     ml_retrain_count = 0
     ml_evaluated = 0
-    ml_component_names = ("AI audit: Production baseline (raw)", "AI audit: Trained ML only (raw)", "AI audit: ML-assisted ensemble (raw)")
     calibration_samples = defaultdict(list)
     raw_calibration_samples = defaultdict(list)
     # Running raw-probability-bin counts avoid rescanning every prior match.
@@ -329,7 +333,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                     predicted = max(range(3), key=lambda index: values[index])
                     brier = sum((values[index] - actual_vector[index]) ** 2 for index in range(3)) / 3.0
                     loss = -log(max(values[actual_index], 1e-15))
-                    stats = model_comparison.setdefault(candidate_name, {"matches": 0, "correct": 0, "brier_sum": 0.0, "log_loss_sum": 0.0})
+                    stats = ml_audit_stats[candidate_name]
                     stats["matches"] += 1
                     stats["correct"] += int(predicted == actual_index)
                     stats["brier_sum"] += brier
@@ -724,6 +728,15 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         },
     }
 
+    ml_audit_match_counts = {name: item["matches"] for name, item in ml_audit_stats.items()}
+    if ml_evaluated and (
+        set(ml_audit_match_counts) != set(ml_component_names)
+        or set(ml_audit_match_counts.values()) != {ml_evaluated}
+    ):
+        raise RuntimeError(
+            "AI walk-forward comparison integrity failure: model rows do not share one identical fixture cohort."
+        )
+
     return {
         "from_year": int(from_year), "minimum_history": int(minimum_history),
         "source_completed_matches": len(rows),
@@ -783,7 +796,13 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "accuracy": item["correct"] / item["matches"] if item["matches"] else None,
             "brier_score": item["brier_sum"] / item["matches"] if item["matches"] else None,
             "log_loss": item["log_loss_sum"] / item["matches"] if item["matches"] else None,
-        } for name, item in sorted(model_comparison.items())],
+        } for name, item in sorted(model_comparison.items())] + [{
+            "model": name,
+            "matches": item["matches"],
+            "accuracy": item["correct"] / item["matches"] if item["matches"] else None,
+            "brier_score": item["brier_sum"] / item["matches"] if item["matches"] else None,
+            "log_loss": item["log_loss_sum"] / item["matches"] if item["matches"] else None,
+        } for name, item in sorted(ml_audit_stats.items()) if item["matches"]],
         "ml_walk_forward": {
             "status": "Evaluated" if ml_evaluated else "Insufficient prior training history",
             "training_examples_available_at_end": ml_total_training_examples,
@@ -791,6 +810,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "training_class_counts": ml_model.get("class_counts", {}) if ml_model else {},
             "retraining_events": ml_retrain_count,
             "evaluated_matches": ml_evaluated,
+            "common_fixture_count": ml_evaluated,
+            "model_match_counts": ml_audit_match_counts,
             "retraining_policy": "Initial fit after 200 prior-date examples; refit after each additional 2,000 examples; maximum 4,000 most recent examples; 40 epochs.",
             "leakage_control": "The model is frozen for each calendar date; that date's labels enter training only after all same-day forecasts are complete.",
             "comparison": "Production 75/25 Poisson-form blend, ML alone, and current 60/20/20 Poisson-form-ML blend are scored on identical ML-active fixtures using raw probabilities.",
