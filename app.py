@@ -3943,6 +3943,13 @@ class MainWindow(QMainWindow):
             (f" Top-5 score coverage: {score_top5:.1%}." if score_top5 is not None else
              " Top-5 score coverage: unavailable.")
         )
+        ml_audit = result.get("ml_walk_forward", {})
+        ml_status = (
+            f" AI walk-forward: {ml_audit.get('evaluated_matches', 0):,} common matches; "
+            f"{ml_audit.get('training_examples_used', 0):,} training examples; "
+            f"{ml_audit.get('retraining_events', 0)} model fits. {ml_audit.get('status', 'Not run')}. "
+            "See the three AI audit rows below; their scores use raw probabilities on identical fixtures."
+        )
         self.backtest_status.setText(
             f"Completed: {result['evaluated_matches']:,} historical matches evaluated from {result['from_year']} onward. "
             f"Corner market selections graded: {result.get('corner_market_predictions', 0):,}. "
@@ -3953,6 +3960,7 @@ class MainWindow(QMainWindow):
             "Sample warnings: below 30 = low; 30–99 = caution; 100+ = adequate. "
             "Overconfidence is flagged only when average predicted probability exceeds the observed-rate 95% Wilson upper bound, with at least 30 samples. "
             "The imported database and production prediction formula were not changed."
+            + ml_status
         )
 
         model_rows = result.get("by_model", [])
