@@ -26,7 +26,8 @@ from api_football import (
 )
 from corners_engine import predict_corner_markets
 from model_ensemble import predict_ensemble
-from machine_learning import build_model_features, train_outcome_model, predict_outcome
+from elo_rating import build_pre_match_elo_ratings
+from machine_learning import build_model_features, build_historical_training_rows, train_outcome_model, predict_outcome
 from fixture_intelligence import summarize_injuries, summarize_lineups
 from weather_client import fetch_match_weather
 from analysis_explainer import team_profile, build_analysis_explanation
@@ -263,11 +264,43 @@ class Store:
                 (cache_key, json.dumps(data), datetime.now(timezone.utc).isoformat()))
 
     def training_records(self):
-        """Return settled historical prediction features for optional local ML training."""
+        """Build historical ML examples and retain an honest readiness diagnostic."""
+        from collections import Counter
+        historical_rows = build_historical_training_rows(
+            self.path, from_year=2020, minimum_history=5, max_samples=4000
+        )
+        counts = Counter(
+            "Home" if row[1] > row[2] else ("Away" if row[1] < row[2] else "Draw")
+            for row in historical_rows
+        )
+        self.training_data_report = {
+            "source": "Imported historical matches (2020+)",
+            "examples": len(historical_rows),
+            "home": counts["Home"],
+            "draw": counts["Draw"],
+            "away": counts["Away"],
+            "minimum_examples": 200,
+            "minimum_per_class": 10,
+            "ready": len(historical_rows) >= 200 and all(counts[name] >= 10 for name in ("Home", "Draw", "Away")),
+        }
+        if historical_rows:
+            return historical_rows
         with self.connect() as db:
-            return db.execute("""SELECT features_json, actual_home_goals, actual_away_goals
+            fallback = db.execute("""SELECT features_json, actual_home_goals, actual_away_goals
                 FROM prediction_runs WHERE is_demo = 0 AND result_status = 'settled'
                 AND features_json IS NOT NULL AND features_json != '{}'""").fetchall()
+        fallback_counts = Counter(
+            "Home" if row[1] > row[2] else ("Away" if row[1] < row[2] else "Draw")
+            for row in fallback if row[1] is not None and row[2] is not None
+        )
+        self.training_data_report.update({
+            "source": "Settled real predictions (fallback; no historical examples qualified)",
+            "examples": len(fallback),
+            "home": fallback_counts["Home"], "draw": fallback_counts["Draw"],
+            "away": fallback_counts["Away"],
+            "ready": len(fallback) >= 200 and all(fallback_counts[name] >= 10 for name in ("Home", "Draw", "Away")),
+        })
+        return fallback
 
     def predicted_fixture_ids(self):
         """Return provider fixture IDs that already have a saved real prediction."""
@@ -341,6 +374,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.resize(1100, 740)
         self.store = Store()
+        self._local_ml_model_cache = None
+        self._local_ml_model_cache_loaded = False
         self.historical_db = HistoricalDatabase(self.store.path)
         self.csv_importer = HistoricalCsvImporter(self.store.path)
         self.reconciliation_db = HistoricalReconciliation(self.store.path)
@@ -1007,11 +1042,15 @@ class MainWindow(QMainWindow):
             return
         stats = self.historical_db.stats()
         corner_coverage = self.historical_db.corner_coverage_summary()
+        advanced_coverage = self.historical_db.advanced_metrics_coverage()["by_metric"]
         self.library_summary.setText(
             f"Stored matches: {stats['matches']:,}  •  Completed: {stats['completed']:,}  •  "
             f"Competitions: {stats['competitions']}  •  Competition-seasons: {stats['competition_seasons']}  •  "
             f"Matches with saved statistics: {stats['with_statistics']:,}  •  "
-            f"Completed matches with both corner totals: {corner_coverage['completed_with_corners']:,}"
+            f"Completed matches with both corner totals: {corner_coverage['completed_with_corners']:,}  •  "
+            f"Advanced metrics — xG: {advanced_coverage['xg']:,}, shots: {advanced_coverage['shots']:,}, "
+            f"shots on target: {advanced_coverage['shots_on_target']:,}, possession: {advanced_coverage['possession']:,}, "
+            f"fouls: {advanced_coverage['fouls']:,}, cards: {advanced_coverage['yellow_cards'] + advanced_coverage['red_cards']:,}"
         )
         coverage = self.historical_db.coverage_summary()
         self.imported_coverage_total_label.setText(
@@ -2839,8 +2878,13 @@ class MainWindow(QMainWindow):
                 scan_context["training_loaded"] = True
             local_ml = scan_context["training_model"]
         else:
-            local_ml = train_outcome_model(self.store.training_records())
+            if not self._local_ml_model_cache_loaded:
+                self._local_ml_model_cache = train_outcome_model(self.store.training_records())
+                self._local_ml_model_cache_loaded = True
+            local_ml = self._local_ml_model_cache
         ml_probabilities = predict_outcome(local_ml, model_features) if local_ml else None
+        training_report = getattr(self.store, "training_data_report", {})
+
         injuries_data = self.store.get_provider_cache(f"injuries:{selected_fixture_id}", 30 * 60)
         lineups_data = self.store.get_provider_cache(f"lineups:{selected_fixture_id}", 10 * 60)
         weather_data = None
@@ -2869,10 +2913,16 @@ class MainWindow(QMainWindow):
             ),
             "Corner history: " + ("Loaded" if corner_averages else "Not loaded / insufficient coverage"),
         ]
+        competition_name = ((item.get("league") or {}).get("name") or "Unknown")
+        elo_ratings = build_pre_match_elo_ratings(
+            self.store.path, fixture_date, competition_name, home_name, away_name,
+        )
         ensemble = predict_ensemble(
             hr, ar, ml_probabilities=ml_probabilities,
             ml_samples=local_ml["samples"] if local_ml else 0,
             context=context_quality,
+            elo_home_rating=elo_ratings["home"],
+            elo_away_rating=elo_ratings["away"],
         )
         home_xg, away_xg = ensemble["home_xg"], ensemble["away_xg"]
         markets = ensemble["markets"]
@@ -3191,7 +3241,10 @@ class MainWindow(QMainWindow):
                 f"Models: {markets.get('model', 'Poisson baseline')}\\n"
                 f"Completed matches per team: {quality.get('minimum_team_sample', 0)}\\n"
                 f"Confidence band: {quality.get('confidence_band', 'Not assessed')}\\n"
-                f"Trained local ML: {'Active' if quality.get('trained_ml_model') else 'Waiting for 200 settled examples'}\\n"
+                f"Trained local ML: {'Active' if quality.get('trained_ml_model') else 'Not active'}\\n"
+                f"Training data: {getattr(self.store, 'training_data_report', {}).get('source', 'Not loaded')}\\n"
+                f"Training examples: {getattr(self.store, 'training_data_report', {}).get('examples', 0):,} / 200 minimum\\n"
+                f"Class counts (Home / Draw / Away): {getattr(self.store, 'training_data_report', {}).get('home', 0):,} / {getattr(self.store, 'training_data_report', {}).get('draw', 0):,} / {getattr(self.store, 'training_data_report', {}).get('away', 0):,} (minimum 10 each)\\n"
                 f"Probability calibration: {(markets.get('calibration_status') or {}).get('state', 'NOT RUN')} — "
                 f"{(markets.get('calibration_status') or {}).get('message', 'No calibration status available')}\\n"
                 f"Historical confidence reliability: " + "; ".join(
@@ -3901,6 +3954,13 @@ class MainWindow(QMainWindow):
             (f" Top-5 score coverage: {score_top5:.1%}." if score_top5 is not None else
              " Top-5 score coverage: unavailable.")
         )
+        ml_audit = result.get("ml_walk_forward", {})
+        ml_status = (
+            f" AI walk-forward: {ml_audit.get('common_fixture_count', ml_audit.get('evaluated_matches', 0)):,} common fixtures; "
+            f"{ml_audit.get('training_examples_used', 0):,} training examples; "
+            f"{ml_audit.get('retraining_events', 0)} model fits. {ml_audit.get('status', 'Not run')}. "
+            "The three explicitly named AI audit rows below share this exact fixture count; compare them with one another, not the general Ensemble row."
+        )
         self.backtest_status.setText(
             f"Completed: {result['evaluated_matches']:,} historical matches evaluated from {result['from_year']} onward. "
             f"Corner market selections graded: {result.get('corner_market_predictions', 0):,}. "
@@ -3911,6 +3971,7 @@ class MainWindow(QMainWindow):
             "Sample warnings: below 30 = low; 30–99 = caution; 100+ = adequate. "
             "Overconfidence is flagged only when average predicted probability exceeds the observed-rate 95% Wilson upper bound, with at least 30 samples. "
             "The imported database and production prediction formula were not changed."
+            + ml_status
         )
 
         model_rows = result.get("by_model", [])

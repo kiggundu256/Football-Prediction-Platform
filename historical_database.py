@@ -403,6 +403,48 @@ class HistoricalDatabase:
             ],
         }
 
+    def advanced_metrics_coverage(self):
+        """Count completed matches with paired advanced metrics actually present."""
+        metric_pairs = {
+            "xg": ("home_xg", "away_xg"),
+            "shots": ("home_shots", "away_shots"),
+            "shots_on_target": ("home_sot", "away_sot"),
+            "possession": ("home_possession", "away_possession"),
+            "fouls": ("home_fouls", "away_fouls"),
+            "yellow_cards": ("home_yellow", "away_yellow"),
+            "red_cards": ("home_red", "away_red"),
+            "corners": ("home_corners", "away_corners"),
+        }
+        counts = {name: 0 for name in metric_pairs}
+        with self.connect() as db:
+            rows = db.execute("""
+                SELECT stats_json,home_team_id,away_team_id
+                FROM historical_matches
+                WHERE status IN ('FT','AET','PEN')
+            """).fetchall()
+        for row in rows:
+            try:
+                stats = json.loads(row["stats_json"] or "{}")
+            except (TypeError, ValueError):
+                stats = {}
+            if not isinstance(stats, dict):
+                continue
+            for name, (home_key, away_key) in metric_pairs.items():
+                home, away = stats.get(home_key), stats.get(away_key)
+                if name == "corners":
+                    by_team = stats.get("corners_by_team") or {}
+                    if home is None:
+                        home = by_team.get(str(row["home_team_id"]), by_team.get(row["home_team_id"]))
+                    if away is None:
+                        away = by_team.get(str(row["away_team_id"]), by_team.get(row["away_team_id"]))
+                try:
+                    if home is not None and away is not None:
+                        float(home)
+                        float(away)
+                        counts[name] += 1
+                except (TypeError, ValueError):
+                    continue
+        return {"completed_matches": len(rows), "by_metric": counts}
     def save_corner_statistics(self, fixture_id, statistics):
         with self.connect() as db:
             row = db.execute(

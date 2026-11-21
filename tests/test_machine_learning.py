@@ -48,5 +48,74 @@ class MachineLearningTests(unittest.TestCase):
         self.assertAlmostEqual(features["home_points_per_game"], 2.0)
 
 
+
+    def test_historical_training_rows_use_only_prior_dates_and_require_history(self):
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        from machine_learning import build_historical_training_rows
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "history.db"
+            db = sqlite3.connect(path)
+            db.execute("""CREATE TABLE historical_matches (
+                fixture_id INTEGER PRIMARY KEY, match_date TEXT, home_team TEXT,
+                away_team TEXT, home_goals INTEGER, away_goals INTEGER, status TEXT
+            )""")
+            fixture_id = 1
+            for index in range(5):
+                date = f"2020-01-{index + 1:02d}"
+                db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                           (fixture_id, date, "Home FC", f"Opponent H{index}", 2, 0))
+                fixture_id += 1
+                db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                           (fixture_id, date, "Away FC", f"Opponent A{index}", 0, 1))
+                fixture_id += 1
+            db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                       (fixture_id, "2020-01-06", "Home FC", "Away FC", 1, 1))
+            db.commit()
+            db.close()
+
+            rows = build_historical_training_rows(path, from_year=2020, minimum_history=5)
+            self.assertEqual(len(rows), 1)
+            features = json.loads(rows[0][0])
+            self.assertGreater(features["home_xg"], 0)
+            self.assertGreater(features["away_xg"], 0)
+            self.assertEqual((rows[0][1], rows[0][2]), (1, 1))
+
+    def test_historical_training_rows_withhold_same_day_results(self):
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        from machine_learning import build_historical_training_rows
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "history.db"
+            db = sqlite3.connect(path)
+            db.execute("""CREATE TABLE historical_matches (
+                fixture_id INTEGER PRIMARY KEY, match_date TEXT, home_team TEXT,
+                away_team TEXT, home_goals INTEGER, away_goals INTEGER, status TEXT
+            )""")
+            fixture_id = 1
+            for index in range(5):
+                date = f"2020-02-{index + 1:02d}"
+                db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                           (fixture_id, date, "Home FC", f"Opponent H{index}", 2, 0))
+                fixture_id += 1
+                db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                           (fixture_id, date, "Away FC", f"Opponent A{index}", 0, 1))
+                fixture_id += 1
+            # Both same-day fixtures must be evaluated before either result is added.
+            db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                       (fixture_id, "2020-02-06", "Home FC", "Away FC", 1, 0))
+            fixture_id += 1
+            db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                       (fixture_id, "2020-02-06", "Away FC", "Home FC", 0, 1))
+            db.commit()
+            db.close()
+
+            rows = build_historical_training_rows(path, from_year=2020, minimum_history=5)
+            self.assertEqual(len(rows), 2)
+
 if __name__ == "__main__":
     unittest.main()

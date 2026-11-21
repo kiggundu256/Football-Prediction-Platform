@@ -103,6 +103,35 @@ class HistoricalDatabaseTests(unittest.TestCase):
             {("Premier League", 2025, 1), ("Premier League", 2024, 1)}
         )
 
+    def test_advanced_metrics_coverage_counts_only_complete_paired_metrics(self):
+        match = fixture(801, "2025-08-10", 10, 20, 2, 1)
+        self.db.upsert_fixtures([match])
+        with self.db.connect() as db:
+            db.execute(
+                "UPDATE historical_matches SET stats_json=? WHERE fixture_id=?",
+                (json.dumps({
+                    "home_xg": 1.8, "away_xg": 0.7,
+                    "home_shots": 14, "away_shots": 8,
+                    "home_sot": 6, "away_sot": 3,
+                    "home_possession": 61, "away_possession": 39,
+                    "home_fouls": 9, "away_fouls": 12,
+                    "home_yellow": 2, "away_yellow": 3,
+                    "home_red": 0, "away_red": 0,
+                }), 801),
+            )
+        pending = fixture(802, "2025-08-17", 10, 30, None, None, "NS")
+        self.db.upsert_fixtures([pending])
+        with self.db.connect() as db:
+            db.execute(
+                "UPDATE historical_matches SET stats_json=? WHERE fixture_id=?",
+                (json.dumps({"home_xg": 1.1}), 802),
+            )
+        coverage = self.db.advanced_metrics_coverage()
+        self.assertEqual(coverage["completed_matches"], 1)
+        for metric in ("xg", "shots", "shots_on_target", "possession",
+                       "fouls", "yellow_cards", "red_cards"):
+            self.assertEqual(coverage["by_metric"][metric], 1)
+        self.assertEqual(coverage["by_metric"]["corners"], 0)
     def test_imported_csv_history_can_be_found_by_team_name(self):
         from csv_historical_importer import HistoricalCsvImporter
         path = Path(self.temp.name) / "history.csv"

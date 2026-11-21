@@ -59,10 +59,15 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertEqual(result["source_completed_matches"], 7)
         self.assertEqual(result["evaluated_matches"], 2)
         self.assertEqual(result["skipped_insufficient_history"], 5)
+        advanced = result["advanced_metrics_features"]
+        self.assertEqual(advanced["evaluated_matches"], 2)
+        self.assertEqual(advanced["by_metric"]["corners"]["both_teams_available"], 2)
+        self.assertEqual(advanced["by_metric"]["xg"]["both_teams_available"], 0)
+        self.assertIn("earlier calendar dates", advanced["leakage_control"])
         self.assertIn("1X2", result["by_market"])
         self.assertEqual(
             {item["model"] for item in result["by_model"]},
-            {"Goal distribution", "Recent form", "Ensemble"},
+            {"Goal distribution", "Recent form", "Elo strength", "Ensemble"},
         )
         for item in result["by_model"]:
             self.assertEqual(item["matches"], 2)
@@ -261,6 +266,61 @@ class HistoricalBacktestTests(unittest.TestCase):
         result = run_historical_backtest(self.path, from_year=2020, minimum_history=6)
         self.assertEqual(result["evaluated_matches"], 0)
         self.assertIn("No matches had enough prior team history", result["message"])
+
+
+    def test_ml_walk_forward_is_chronological_and_compares_identical_fixtures(self):
+        import datetime
+        db = sqlite3.connect(self.path)
+        start = datetime.date(2021, 1, 1)
+        outcomes = ((2, 0), (1, 1), (0, 2))
+        for index in range(260):
+            day = start + datetime.timedelta(days=index)
+            home_goals, away_goals = outcomes[index % 3]
+            insert_match(db, 1000 + index, day.isoformat(), "Alpha FC", "Beta FC", home_goals, away_goals)
+        db.commit()
+        db.close()
+        result = run_historical_backtest(self.path, from_year=2021, minimum_history=1)
+        audit = result["ml_walk_forward"]
+        self.assertEqual(audit["status"], "Evaluated")
+        self.assertGreaterEqual(audit["training_examples_used"], 200)
+        self.assertGreaterEqual(audit["retraining_events"], 1)
+        self.assertGreater(audit["evaluated_matches"], 0)
+        models = {item["model"]: item for item in result["by_model"]}
+        expected = {"AI audit: Production baseline (raw)", "AI audit: Trained ML only (raw)", "AI audit: ML-assisted ensemble (raw)"}
+        self.assertTrue(expected.issubset(models))
+        self.assertEqual({models[name]["matches"] for name in expected}, {audit["evaluated_matches"]})
+        self.assertEqual(audit["common_fixture_count"], audit["evaluated_matches"])
+        self.assertEqual(set(audit["model_match_counts"]), expected)
+        self.assertEqual(set(audit["model_match_counts"].values()), {audit["common_fixture_count"]})
+        self.assertIn("same-day", audit["leakage_control"])
+        self.assertIn("identical", audit["comparison"])
+
+
+    def test_same_day_fixtures_share_pre_day_elo_ratings(self):
+        from unittest.mock import patch
+        import historical_backtest
+
+        class RecordingElo:
+            def __init__(self):
+                self.updates = []
+                self.rating_snapshots = []
+
+            def rating(self, competition, team):
+                self.rating_snapshots.append(len(self.updates))
+                return 1500.0
+
+            def update(self, competition, home, away, home_goals, away_goals):
+                self.updates.append((competition, home, away, home_goals, away_goals))
+
+        recorder = RecordingElo()
+        with patch.object(historical_backtest, "EloRatingSystem", return_value=recorder):
+            run_historical_backtest(self.path, from_year=2020, minimum_history=5)
+
+        # Four rating reads belong to the two fixtures on the shared evaluation
+        # date. None may observe an update from another fixture on that date.
+        self.assertEqual(len(recorder.rating_snapshots), 4)
+        self.assertEqual(len(set(recorder.rating_snapshots)), 1)
+        self.assertEqual(len(recorder.updates), 7)
 
 
 if __name__ == "__main__":

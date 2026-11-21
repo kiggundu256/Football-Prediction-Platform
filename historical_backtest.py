@@ -11,6 +11,9 @@ from math import log, sqrt
 
 from model_ensemble import predict_ensemble
 from corners_engine import predict_corner_markets
+from machine_learning import build_model_features, predict_outcome, train_outcome_model
+from elo_rating import EloRatingSystem
+from advanced_metrics import extract_match_team_metrics, build_match_advanced_features, METRIC_KEYS
 
 
 def _team_key(name):
@@ -223,7 +226,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     try:
         rows = db.execute("""
             SELECT fixture_id, league_id, season, competition, country, match_date,
-                   home_team, away_team, home_goals, away_goals, stats_json
+                   home_team_id, home_team, away_team_id, away_team,
+                   home_goals, away_goals, stats_json
             FROM historical_matches
             WHERE match_date >= ? AND status IN ('FT','AET','PEN')
               AND home_goals IS NOT NULL AND away_goals IS NOT NULL
@@ -235,6 +239,10 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         db.close()
 
     histories = defaultdict(list)
+    elo = EloRatingSystem()
+    elo_evaluated = 0
+    elo_brier_sum = elo_log_loss_sum = 0.0
+    elo_correct = 0
     league_outcomes = defaultdict(lambda: [0, 0, 0])
     by_competition = defaultdict(lambda: {
         "matches": 0, "model_correct": 0, "model_brier_sum": 0.0,
@@ -243,6 +251,17 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     })
     market_stats = {}
     model_comparison = {}
+    ml_component_names = ("AI audit: Production baseline (raw)", "AI audit: Trained ML only (raw)", "AI audit: ML-assisted ensemble (raw)")
+    ml_audit_stats = {
+        name: {"matches": 0, "correct": 0, "brier_sum": 0.0, "log_loss_sum": 0.0}
+        for name in ml_component_names
+    }
+    ml_training_rows = []
+    ml_total_training_examples = 0
+    ml_last_training_total = 0
+    ml_model = None
+    ml_retrain_count = 0
+    ml_evaluated = 0
     calibration_samples = defaultdict(list)
     raw_calibration_samples = defaultdict(list)
     # Running raw-probability-bin counts avoid rescanning every prior match.
@@ -261,6 +280,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     score_top1_correct = score_top5_correct = score_graded = 0
     corner_graded = 0
     skipped_insufficient_history = 0
+    advanced_feature_coverage = {name: {"home_samples": 0, "away_samples": 0, "both_teams_available": 0} for name in METRIC_KEYS}
+    advanced_feature_matches = 0
     evaluated = 0
     brier_sum = log_loss_sum = baseline_brier_sum = baseline_log_loss_sum = 0.0
     daily_groups = defaultdict(list)
@@ -270,7 +291,14 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     # Grouping by date ensures a fixture cannot use another result from the same day.
     for match_date in sorted(daily_groups):
         day_rows = daily_groups[match_date]
+        if ml_total_training_examples >= 200 and (ml_model is None or ml_total_training_examples - ml_last_training_total >= 2000):
+            ml_model = train_outcome_model(ml_training_rows, minimum_samples=200, epochs=40)
+            if ml_model:
+                ml_last_training_total = ml_total_training_examples
+                ml_retrain_count += 1
+        pending_ml_training_rows = []
         pending_market_calibration = defaultdict(list)
+        # All forecasts for this date must use Elo ratings from earlier dates only.
         for row in day_rows:
             home_key, away_key = _team_key(row["home_team"]), _team_key(row["away_team"])
             if not home_key or not away_key or home_key == away_key:
@@ -284,14 +312,56 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 skipped_insufficient_history += 1
                 continue
 
+            competition_name = str(row["competition"] or "Unknown")
+            home_elo = elo.rating(competition_name, row["home_team"])
+            away_elo = elo.rating(competition_name, row["away_team"])
             try:
-                forecast = predict_ensemble(home_profile, away_profile)
+                forecast = predict_ensemble(
+                    home_profile, away_profile,
+                    elo_home_rating=home_elo, elo_away_rating=away_elo,
+                )
             except (KeyError, TypeError, ValueError, OverflowError):
                 skipped_insufficient_history += 1
                 continue
 
             markets = forecast["markets"]
+            advanced_features = build_match_advanced_features(home_history, away_history)
+            advanced_feature_matches += 1
+            for metric, coverage in advanced_features["coverage"].items():
+                item = advanced_feature_coverage[metric]
+                item["home_samples"] += int(coverage["home_samples"] > 0)
+                item["away_samples"] += int(coverage["away_samples"] > 0)
+                item["both_teams_available"] += int(coverage["available_for_both"])
             actual_home, actual_away = int(row["home_goals"]), int(row["away_goals"])
+            ml_features = build_model_features(home_profile, away_profile, forecast["home_xg"], forecast["away_xg"])
+            pending_ml_training_rows.append((json.dumps(ml_features, sort_keys=True), actual_home, actual_away))
+            if ml_model:
+                ml_probabilities = predict_outcome(ml_model, ml_features)
+                goal_probs = forecast["goal_model"]
+                form_probs = forecast["form_model"]
+                ml_keys = ("home_win", "draw", "away_win")
+                production_probs = {key: 0.75 * float(goal_probs[key]) + 0.25 * float(form_probs[key]) for key in ml_keys}
+                hybrid_probs = {key: 0.60 * float(goal_probs[key]) + 0.20 * float(form_probs[key]) + 0.20 * float(ml_probabilities[key]) for key in ml_keys}
+                actual_index = 0 if actual_home > actual_away else (2 if actual_home < actual_away else 1)
+                actual_vector = [1.0 if index == actual_index else 0.0 for index in range(3)]
+                candidate_models = {
+                    ml_component_names[0]: production_probs,
+                    ml_component_names[1]: ml_probabilities,
+                    ml_component_names[2]: hybrid_probs,
+                }
+                for candidate_name, candidate in candidate_models.items():
+                    values = [max(1e-12, float(candidate[key])) for key in ml_keys]
+                    total = sum(values)
+                    values = [value / total for value in values]
+                    predicted = max(range(3), key=lambda index: values[index])
+                    brier = sum((values[index] - actual_vector[index]) ** 2 for index in range(3)) / 3.0
+                    loss = -log(max(values[actual_index], 1e-15))
+                    stats = ml_audit_stats[candidate_name]
+                    stats["matches"] += 1
+                    stats["correct"] += int(predicted == actual_index)
+                    stats["brier_sum"] += brier
+                    stats["log_loss_sum"] += loss
+                ml_evaluated += 1
 
             def record_binary_market(name, raw_probability, actual_event):
                 raw_p = max(0.0, min(1.0, float(raw_probability)))
@@ -329,9 +399,21 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 pending_outcome_calibration[key].append(
                     (raw_probability, key == outcome_keys[actual_outcome])
                 )
+            elo_component = forecast.get("elo_model") or {}
+            if elo_component:
+                elo_probs = [float(elo_component[key]) for key in outcome_keys]
+                elo_prediction = max(range(3), key=lambda index: elo_probs[index])
+                elo_brier_sum += sum(
+                    (elo_probs[i] - (1.0 if i == actual_outcome else 0.0)) ** 2
+                    for i in range(3)
+                ) / 3.0
+                elo_log_loss_sum += -log(max(elo_probs[actual_outcome], 1e-15))
+                elo_correct += int(elo_prediction == actual_outcome)
+                elo_evaluated += 1
             component_models = {
                 "Goal distribution": forecast.get("goal_model", {}),
                 "Recent form": forecast.get("form_model", {}),
+                "Elo strength": elo_component,
                 "Ensemble": calibrated_ensemble,
             }
             for model_name, component in component_models.items():
@@ -480,6 +562,16 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             if max_matches is not None and evaluated >= int(max_matches):
                 break
 
+        # Reveal today's results to Elo only after every same-day forecast.
+        # This prevents one fixture's result from affecting another fixture's
+        # pre-match rating when multiple fixtures share a calendar date.
+        for row in day_rows:
+            elo.update(
+                str(row["competition"] or "Unknown"),
+                row["home_team"], row["away_team"],
+                int(row["home_goals"]), int(row["away_goals"]),
+            )
+
         # Reveal this date's market outcomes only after every same-day forecast.
         for market_name, samples in pending_market_calibration.items():
             bins = market_calibration_bins[market_name]
@@ -538,6 +630,11 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                     add_baseline_event(f"{prefix} Over {line}", actual_over)
                     add_baseline_event(f"{prefix} Under {line}", not actual_over)
 
+        ml_training_rows.extend(pending_ml_training_rows)
+        ml_total_training_examples += len(pending_ml_training_rows)
+        if len(ml_training_rows) > 4000:
+            ml_training_rows = ml_training_rows[-4000:]
+
         # Only results from the completed date become available to later dates.
         for row in day_rows:
             league_key = (str(row["country"] or ""), str(row["competition"] or ""))
@@ -552,23 +649,22 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             home_key, away_key = _team_key(row["home_team"]), _team_key(row["away_team"])
             if not home_key or not away_key or home_key == away_key:
                 continue
-            try:
-                corner_data = json.loads(row["stats_json"] or "{}")
-            except (TypeError, ValueError):
-                corner_data = {}
-            try:
-                hc, ac = corner_data.get("home_corners"), corner_data.get("away_corners")
-                hc = float(hc) if hc is not None else None
-                ac = float(ac) if ac is not None else None
-            except (TypeError, ValueError):
-                hc = ac = None
+            match_metrics = extract_match_team_metrics(
+                row["stats_json"], row["home_team_id"], row["away_team_id"]
+            )
+            hc = match_metrics["home"].get("corners")
+            ac = match_metrics["away"].get("corners")
             histories[home_key].append({
                 "scored": int(row["home_goals"]), "conceded": int(row["away_goals"]),
                 "corners_for": hc, "corners_against": ac,
+                "advanced_for": match_metrics["home"],
+                "advanced_against": match_metrics["away"],
             })
             histories[away_key].append({
                 "scored": int(row["away_goals"]), "conceded": int(row["home_goals"]),
                 "corners_for": ac, "corners_against": hc,
+                "advanced_for": match_metrics["away"],
+                "advanced_against": match_metrics["home"],
             })
         if max_matches is not None and evaluated >= int(max_matches):
             break
@@ -676,6 +772,15 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         },
     }
 
+    ml_audit_match_counts = {name: item["matches"] for name, item in ml_audit_stats.items()}
+    if ml_evaluated and (
+        set(ml_audit_match_counts) != set(ml_component_names)
+        or set(ml_audit_match_counts.values()) != {ml_evaluated}
+    ):
+        raise RuntimeError(
+            "AI walk-forward comparison integrity failure: model rows do not share one identical fixture cohort."
+        )
+
     return {
         "from_year": int(from_year), "minimum_history": int(minimum_history),
         "source_completed_matches": len(rows),
@@ -683,6 +788,13 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         "live_calibration_profile": live_calibration_profile,
         "competition_diagnostics": competition_diagnostics,
         "evaluated_matches": evaluated,
+        "advanced_metrics_features": {
+            "evaluated_matches": advanced_feature_matches,
+            "by_metric": advanced_feature_coverage,
+            "window": 10,
+            "missing_values": "Preserved as unavailable; never imputed as zero",
+            "leakage_control": "Only completed matches from earlier calendar dates enter rolling histories",
+        },
         "skipped_insufficient_history": skipped_insufficient_history,
         "accuracy_1x2": market_stats["1X2"]["correct"] / market_stats["1X2"]["graded"],
         "brier_score_1x2": brier_sum / evaluated,
@@ -729,13 +841,43 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             },
             "leakage_control": "Only completed matches from earlier calendar days are used.",
         },
+        "elo_walk_forward": {
+            "status": "Evaluated" if elo_evaluated else "No eligible matches",
+            "matches": elo_evaluated,
+            "accuracy": elo_correct / elo_evaluated if elo_evaluated else None,
+            "brier_score": elo_brier_sum / elo_evaluated if elo_evaluated else None,
+            "log_loss": elo_log_loss_sum / elo_evaluated if elo_evaluated else None,
+            "initial_rating": 1500,
+            "home_advantage_points": 65,
+            "k_factor": 24,
+            "leakage_control": "Each date is forecast before any result from that date updates Elo ratings.",
+        },
         "by_model": [{
             "model": name,
             "matches": item["matches"],
             "accuracy": item["correct"] / item["matches"] if item["matches"] else None,
             "brier_score": item["brier_sum"] / item["matches"] if item["matches"] else None,
             "log_loss": item["log_loss_sum"] / item["matches"] if item["matches"] else None,
-        } for name, item in sorted(model_comparison.items())],
+        } for name, item in sorted(model_comparison.items())] + [{
+            "model": name,
+            "matches": item["matches"],
+            "accuracy": item["correct"] / item["matches"] if item["matches"] else None,
+            "brier_score": item["brier_sum"] / item["matches"] if item["matches"] else None,
+            "log_loss": item["log_loss_sum"] / item["matches"] if item["matches"] else None,
+        } for name, item in sorted(ml_audit_stats.items()) if item["matches"]],
+        "ml_walk_forward": {
+            "status": "Evaluated" if ml_evaluated else "Insufficient prior training history",
+            "training_examples_available_at_end": ml_total_training_examples,
+            "training_examples_used": int(ml_model["samples"]) if ml_model else 0,
+            "training_class_counts": ml_model.get("class_counts", {}) if ml_model else {},
+            "retraining_events": ml_retrain_count,
+            "evaluated_matches": ml_evaluated,
+            "common_fixture_count": ml_evaluated,
+            "model_match_counts": ml_audit_match_counts,
+            "retraining_policy": "Initial fit after 200 prior-date examples; refit after each additional 2,000 examples; maximum 4,000 most recent examples; 40 epochs.",
+            "leakage_control": "The model is frozen for each calendar date; that date's labels enter training only after all same-day forecasts are complete.",
+            "comparison": "Production 75/25 Poisson-form blend, ML alone, and current 60/20/20 Poisson-form-ML blend are scored on identical ML-active fixtures using raw probabilities.",
+        },
         "by_market": _finalize_market_stats(market_stats),
         "by_competition_season": groups,
         "methodology": (
@@ -746,6 +888,6 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "competition-level outcome-rate baseline using prior results only. Binary goals, BTTS and corner markets use separate "
             "prequential calibrators and smoothed market-specific event-rate baselines. Correct-score top-1 is benchmarked against "
             "prior competition score frequencies with add-one smoothing over an 11x11 score grid. No trained ML, odds, injuries, "
-            "lineups, referee or weather inputs are used in this historical test. Raw and calibrated Brier scores are reported separately."
+            "lineups, referee or weather inputs are used in the existing-market test. A separate leakage-safe ML walk-forward audit compares the production 75/25 Poisson-form blend, ML alone, and the 60/20/20 ML-assisted blend on identical ML-active fixtures using raw probabilities. Raw and calibrated Brier scores are reported separately."
         ),
     }
