@@ -284,6 +284,9 @@ class HistoricalBacktestTests(unittest.TestCase):
         expected = {"AI audit: Production baseline (raw)", "AI audit: Trained ML only (raw)", "AI audit: ML-assisted ensemble (raw)"}
         self.assertTrue(expected.issubset(models))
         self.assertEqual({models[name]["matches"] for name in expected}, {audit["evaluated_matches"]})
+        self.assertEqual(audit["common_fixture_count"], audit["evaluated_matches"])
+        self.assertEqual(set(audit["model_match_counts"]), expected)
+        self.assertEqual(set(audit["model_match_counts"].values()), {audit["common_fixture_count"]})
         self.assertIn("same-day", audit["leakage_control"])
         self.assertIn("identical", audit["comparison"])
 
