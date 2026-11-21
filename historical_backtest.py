@@ -294,14 +294,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 ml_retrain_count += 1
         pending_ml_training_rows = []
         pending_market_calibration = defaultdict(list)
-        # Update Elo only after all forecasts for this date have been produced.
-        for row in day_rows:
-            elo.update(
-                str(row["competition"] or "Unknown"),
-                row["home_team"], row["away_team"],
-                int(row["home_goals"]), int(row["away_goals"]),
-            )
-
+        # All forecasts for this date must use Elo ratings from earlier dates only.
         for row in day_rows:
             home_key, away_key = _team_key(row["home_team"]), _team_key(row["away_team"])
             if not home_key or not away_key or home_key == away_key:
@@ -557,6 +550,16 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
 
             if max_matches is not None and evaluated >= int(max_matches):
                 break
+
+        # Reveal today's results to Elo only after every same-day forecast.
+        # This prevents one fixture's result from affecting another fixture's
+        # pre-match rating when multiple fixtures share a calendar date.
+        for row in day_rows:
+            elo.update(
+                str(row["competition"] or "Unknown"),
+                row["home_team"], row["away_team"],
+                int(row["home_goals"]), int(row["away_goals"]),
+            )
 
         # Reveal this date's market outcomes only after every same-day forecast.
         for market_name, samples in pending_market_calibration.items():
