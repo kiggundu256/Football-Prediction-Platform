@@ -26,6 +26,7 @@ from api_football import (
 )
 from corners_engine import predict_corner_markets
 from model_ensemble import predict_ensemble
+from elo_rating import build_pre_match_elo_ratings
 from machine_learning import build_model_features, build_historical_training_rows, train_outcome_model, predict_outcome
 from fixture_intelligence import summarize_injuries, summarize_lineups
 from weather_client import fetch_match_weather
@@ -2908,10 +2909,16 @@ class MainWindow(QMainWindow):
             ),
             "Corner history: " + ("Loaded" if corner_averages else "Not loaded / insufficient coverage"),
         ]
+        competition_name = ((item.get("league") or {}).get("name") or "Unknown")
+        elo_ratings = build_pre_match_elo_ratings(
+            self.store.path, fixture_date, competition_name, home_name, away_name,
+        )
         ensemble = predict_ensemble(
             hr, ar, ml_probabilities=ml_probabilities,
             ml_samples=local_ml["samples"] if local_ml else 0,
             context=context_quality,
+            elo_home_rating=elo_ratings["home"],
+            elo_away_rating=elo_ratings["away"],
         )
         home_xg, away_xg = ensemble["home_xg"], ensemble["away_xg"]
         markets = ensemble["markets"]
