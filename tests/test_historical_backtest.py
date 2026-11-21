@@ -263,5 +263,29 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("No matches had enough prior team history", result["message"])
 
 
+    def test_ml_walk_forward_is_chronological_and_compares_identical_fixtures(self):
+        import datetime
+        db = sqlite3.connect(self.path)
+        start = datetime.date(2021, 1, 1)
+        outcomes = ((2, 0), (1, 1), (0, 2))
+        for index in range(260):
+            day = start + datetime.timedelta(days=index)
+            home_goals, away_goals = outcomes[index % 3]
+            insert_match(db, 1000 + index, day.isoformat(), "Alpha FC", "Beta FC", home_goals, away_goals)
+        db.commit()
+        db.close()
+        result = run_historical_backtest(self.path, from_year=2021, minimum_history=1)
+        audit = result["ml_walk_forward"]
+        self.assertEqual(audit["status"], "Evaluated")
+        self.assertGreaterEqual(audit["training_examples_used"], 200)
+        self.assertGreaterEqual(audit["retraining_events"], 1)
+        self.assertGreater(audit["evaluated_matches"], 0)
+        models = {item["model"]: item for item in result["by_model"]}
+        expected = {"AI audit: Production baseline (raw)", "AI audit: Trained ML only (raw)", "AI audit: ML-assisted ensemble (raw)"}
+        self.assertTrue(expected.issubset(models))
+        self.assertEqual({models[name]["matches"] for name in expected}, {audit["evaluated_matches"]})
+        self.assertIn("same-day", audit["leakage_control"])
+        self.assertIn("identical", audit["comparison"])
+
 if __name__ == "__main__":
     unittest.main()
