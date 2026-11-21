@@ -44,16 +44,19 @@ class EloRatingSystem:
         return dict(self._ratings)
 
 
+_PREMATCH_ELO_CACHE = {}
+
+
 def build_pre_match_elo_ratings(database_path, before_date, competition,
                                 home_team, away_team, initial_rating=1500.0):
     """Rebuild competition Elo strictly before a fixture date from local history."""
     import sqlite3
-    from functools import lru_cache
-
-    @lru_cache(maxsize=128)
-    def _build(path, cutoff, competition_name, initial):
-        system = EloRatingSystem(initial_rating=initial)
-        db = sqlite3.connect(path)
+    cache_key = (str(database_path), str(before_date or "9999-12-31"),
+                 str(competition or "Unknown"), float(initial_rating))
+    cached = _PREMATCH_ELO_CACHE.get(cache_key)
+    if cached is None:
+        system = EloRatingSystem(initial_rating=initial_rating)
+        db = sqlite3.connect(str(database_path))
         try:
             rows = db.execute("""
                 SELECT home_team, away_team, home_goals, away_goals
@@ -65,19 +68,20 @@ def build_pre_match_elo_ratings(database_path, before_date, competition,
                   AND trim(COALESCE(home_team,'')) <> ''
                   AND trim(COALESCE(away_team,'')) <> ''
                 ORDER BY match_date ASC, fixture_id ASC
-            """, (cutoff, competition_name)).fetchall()
+            """, (cache_key[1], cache_key[2])).fetchall()
         finally:
             db.close()
         for home, away, hg, ag in rows:
-            system.update(competition_name, home, away, int(hg), int(ag))
-        return system.snapshot()
-
-    snapshot = _build(str(database_path), str(before_date or "9999-12-31"),
-                      str(competition or "Unknown"), float(initial_rating))
+            system.update(competition, home, away, int(hg), int(ag))
+        cached = (system.snapshot(), len(rows))
+        if len(_PREMATCH_ELO_CACHE) >= 128:
+            _PREMATCH_ELO_CACHE.clear()
+        _PREMATCH_ELO_CACHE[cache_key] = cached
+    snapshot, matches_used = cached
     home_key = EloRatingSystem._key(competition, home_team)
     away_key = EloRatingSystem._key(competition, away_team)
     return {
         "home": snapshot.get(home_key, float(initial_rating)),
         "away": snapshot.get(away_key, float(initial_rating)),
-        "matches_used": len(snapshot),
+        "matches_used": matches_used,
     }
