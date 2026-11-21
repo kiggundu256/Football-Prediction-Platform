@@ -51,7 +51,14 @@ def build_pre_match_elo_ratings(database_path, before_date, competition,
                                 home_team, away_team, initial_rating=1500.0):
     """Rebuild competition Elo strictly before a fixture date from local history."""
     import sqlite3
-    cache_key = (str(database_path), str(before_date or "9999-12-31"),
+    if not before_date or len(str(before_date)) < 10:
+        return {"home": float(initial_rating), "away": float(initial_rating), "matches_used": 0}
+    import os
+    try:
+        db_stamp = (os.path.getmtime(str(database_path)), os.path.getsize(str(database_path)))
+    except OSError:
+        db_stamp = (None, None)
+    cache_key = (str(database_path), db_stamp, str(before_date)[:10],
                  str(competition or "Unknown"), float(initial_rating))
     cached = _PREMATCH_ELO_CACHE.get(cache_key)
     if cached is None:
@@ -68,7 +75,7 @@ def build_pre_match_elo_ratings(database_path, before_date, competition,
                   AND trim(COALESCE(home_team,'')) <> ''
                   AND trim(COALESCE(away_team,'')) <> ''
                 ORDER BY match_date ASC, fixture_id ASC
-            """, (cache_key[1], cache_key[2])).fetchall()
+            """, (cache_key[2], cache_key[3])).fetchall()
         finally:
             db.close()
         for home, away, hg, ag in rows:
