@@ -4076,7 +4076,7 @@ class MainWindow(QMainWindow):
         )
 
         def pct(value):
-            return self._experiment_number(value, percent=True)
+            return "—" if value is None else f"{float(value):.3%}"
         def num(value):
             return self._experiment_number(value)
         base_draw = baseline.get("draw_audit", {})
@@ -4089,6 +4089,7 @@ class MainWindow(QMainWindow):
             ("Draw classification accuracy", "prediction_accuracy", pct),
             ("Draw precision", "precision", pct),
             ("Draw recall", "recall", pct),
+            ("Draw F1 score", "f1_score", num),
             ("Draw Brier score (calibrated)", "brier_score", num),
             ("Draw log loss (calibrated)", "log_loss", num),
             ("Draw Brier score (raw)", "raw_brier_score", num),

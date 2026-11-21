@@ -345,5 +345,40 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("No matches had enough prior team history", result["message"])
 
 
+    @patch("historical_backtest.run_historical_backtest")
+    def test_draw_promotion_gate_rejects_candidate_with_worse_raw_draw_scores(self, mocked_run):
+        baseline = {
+            "evaluated_matches": 50, "accuracy_1x2": 0.48,
+            "brier_score_1x2": 0.21, "log_loss_1x2": 1.00,
+            "draw_audit": {"brier_score": 0.18, "log_loss": 0.55,
+                           "raw_brier_score": 0.18, "raw_log_loss": 0.55},
+        }
+        candidate = {
+            "evaluated_matches": 50, "accuracy_1x2": 0.49,
+            "brier_score_1x2": 0.20, "log_loss_1x2": 0.99,
+            "draw_audit": {"brier_score": 0.17, "log_loss": 0.54,
+                           "raw_brier_score": 0.19, "raw_log_loss": 0.56},
+        }
+        mocked_run.side_effect = [baseline, candidate]
+        result = run_draw_probability_experiment(self.path, from_year=2020, minimum_history=5)
+        self.assertFalse(result["promotion_gate_passed"])
+        self.assertLess(result["delta_candidate_minus_baseline"]["raw_draw_brier_improvement"], 0)
+        self.assertLess(result["delta_candidate_minus_baseline"]["raw_draw_log_loss_improvement"], 0)
+
+    def test_draw_threshold_sweep_reports_precision_recall_and_f1(self):
+        from historical_backtest import _binary_threshold_sweep
+        rows = _binary_threshold_sweep(
+            [(0.40, True), (0.35, True), (0.30, False), (0.10, False)],
+            thresholds=(0.30, 0.40),
+        )
+        self.assertEqual(rows[0]["true_positives"], 2)
+        self.assertEqual(rows[0]["false_positives"], 1)
+        self.assertAlmostEqual(rows[0]["precision"], 2 / 3)
+        self.assertEqual(rows[0]["recall"], 1.0)
+        self.assertAlmostEqual(rows[0]["f1"], 0.8)
+        self.assertEqual(rows[1]["true_positives"], 1)
+        self.assertEqual(rows[1]["false_negatives"], 1)
+        self.assertAlmostEqual(rows[1]["recall"], 0.5)
+
 if __name__ == "__main__":
     unittest.main()

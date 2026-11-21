@@ -210,6 +210,35 @@ def _calibration_bins(samples, bin_count=10):
     return output
 
 
+def _binary_threshold_sweep(samples, thresholds=(0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50)):
+    """Evaluate draw classification thresholds without changing probability scores."""
+    output = []
+    for threshold in thresholds:
+        tp = fp = fn = tn = 0
+        for probability, actual in samples:
+            predicted = float(probability) >= float(threshold)
+            if predicted and actual:
+                tp += 1
+            elif predicted:
+                fp += 1
+            elif actual:
+                fn += 1
+            else:
+                tn += 1
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2.0 * precision * recall / (precision + recall) if precision + recall else 0.0
+        total = tp + fp + fn + tn
+        output.append({
+            "threshold": float(threshold), "graded": total,
+            "predicted_draws": tp + fp, "true_positives": tp,
+            "false_positives": fp, "false_negatives": fn,
+            "precision": precision, "recall": recall, "f1": f1,
+            "classification_accuracy": (tp + tn) / total if total else None,
+        })
+    return output
+
+
 def _multiclass_calibration(samples, bin_count=10):
     """Calibration of the most likely 1X2 outcome, not three independent events."""
     return _calibration_bins(samples, bin_count)
@@ -752,6 +781,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "prediction_accuracy": (draw_tp + (len(draw_samples) - draw_tp - draw_fp - draw_fn)) / len(draw_samples) if draw_samples else None,
             "precision": draw_tp / (draw_tp + draw_fp) if draw_tp + draw_fp else None,
             "recall": draw_tp / (draw_tp + draw_fn) if draw_tp + draw_fn else None,
+            "f1_score": (2.0 * draw_tp / (2.0 * draw_tp + draw_fp + draw_fn)
+                         if (2 * draw_tp + draw_fp + draw_fn) else 0.0),
             "true_positives": draw_tp, "false_positives": draw_fp, "false_negatives": draw_fn,
             "brier_score": draw_brier_sum / len(draw_samples) if draw_samples else None,
             "log_loss": draw_log_loss_sum / len(draw_samples) if draw_samples else None,
@@ -759,6 +790,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "raw_log_loss": draw_raw_log_loss_sum / len(raw_draw_samples) if raw_draw_samples else None,
             "calibration": _calibration_bins(draw_samples),
             "raw_calibration": _calibration_bins(raw_draw_samples),
+            "threshold_sweep": _binary_threshold_sweep(draw_samples),
+            "raw_threshold_sweep": _binary_threshold_sweep(raw_draw_samples),
             "by_competition_season": [{"competition_season": name, "matches": item["n"], "actual_draw_rate": item["draws"] / item["n"], "prediction_accuracy": item["correct"] / item["n"], "brier_score": item["brier"] / item["n"], "log_loss": item["log_loss"] / item["n"]} for name, item in sorted(draw_competition.items())],
             "by_year": [{"year": name, "matches": item["n"], "actual_draw_rate": item["draws"] / item["n"], "prediction_accuracy": item["correct"] / item["n"], "brier_score": item["brier"] / item["n"], "log_loss": item["log_loss"] / item["n"]} for name, item in sorted(draw_periods.items())],
             "classification_threshold": "Draw predicted when calibrated draw probability is at least as high as both calibrated home-win and away-win probabilities.",
@@ -949,6 +982,8 @@ def run_draw_probability_experiment(database_path, from_year=2020,
 
     draw_brier_gain = draw_gain("brier_score")
     draw_log_loss_gain = draw_gain("log_loss")
+    raw_draw_brier_gain = draw_gain("raw_brier_score")
+    raw_draw_log_loss_gain = draw_gain("raw_log_loss")
     accuracy_change = (
         float(candidate["accuracy_1x2"]) - float(baseline["accuracy_1x2"])
         if baseline.get("accuracy_1x2") is not None and candidate.get("accuracy_1x2") is not None
@@ -960,8 +995,10 @@ def run_draw_probability_experiment(database_path, from_year=2020,
         same_coverage
         and brier_gain is not None and log_loss_gain is not None
         and draw_brier_gain is not None and draw_log_loss_gain is not None
+        and raw_draw_brier_gain is not None and raw_draw_log_loss_gain is not None
         and brier_gain > 0 and log_loss_gain > 0
         and draw_brier_gain > 0 and draw_log_loss_gain > 0
+        and raw_draw_brier_gain > 0 and raw_draw_log_loss_gain > 0
     )
     return {
         "experiment": "fixed_draw_prior_vs_goal_anchored_draw",
@@ -994,20 +1031,24 @@ def run_draw_probability_experiment(database_path, from_year=2020,
             "log_loss_improvement": log_loss_gain,
             "draw_brier_improvement": draw_brier_gain,
             "draw_log_loss_improvement": draw_log_loss_gain,
+            "raw_draw_brier_improvement": raw_draw_brier_gain,
+            "raw_draw_log_loss_improvement": raw_draw_log_loss_gain,
         },
         "promotion_gate_passed": passed,
         "recommendation": (
-            "Candidate improves overall 1X2 and draw-specific Brier score and log loss "
-            "on identical coverage; review calibration and competition breakdowns before promotion."
+            "Candidate improves overall 1X2 plus calibrated and raw draw Brier score and log loss "
+            "on identical coverage; review threshold, calibration and competition diagnostics before promotion."
             if passed else
-            "Do not promote. The candidate must improve both overall 1X2 and draw-specific "
-            "Brier score and log loss on identical evaluation coverage."
+            "Do not promote. The candidate must improve overall 1X2 and both calibrated and raw "
+            "draw Brier score and log loss on identical evaluation coverage."
         ),
         "methodology": (
             "The only changed variable is the draw probability used by the recent-form "
             "component: fixed 25% baseline versus the independent-Poisson goal model's "
             "draw probability. Team profiles, home advantage, ensemble weights, fixture "
-            "selection, date-safe calibration and scoring remain identical. Production "
-            "predictions remain unchanged."
+            "selection, date-safe calibration and scoring remain identical. Promotion requires "
+            "improvement in both calibrated and raw draw Brier/log loss as well as overall 1X2 "
+            "Brier/log loss. Threshold sweeps are diagnostic only and do not tune or alter the "
+            "production decision rule. Production predictions remain unchanged."
         ),
     }
