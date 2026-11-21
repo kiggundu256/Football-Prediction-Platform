@@ -13,6 +13,7 @@ from model_ensemble import predict_ensemble
 from corners_engine import predict_corner_markets
 from machine_learning import build_model_features, predict_outcome, train_outcome_model
 from elo_rating import EloRatingSystem
+from advanced_metrics import extract_match_team_metrics, build_match_advanced_features, METRIC_KEYS
 
 
 def _team_key(name):
@@ -225,7 +226,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     try:
         rows = db.execute("""
             SELECT fixture_id, league_id, season, competition, country, match_date,
-                   home_team, away_team, home_goals, away_goals, stats_json
+                   home_team_id, home_team, away_team_id, away_team,
+                   home_goals, away_goals, stats_json
             FROM historical_matches
             WHERE match_date >= ? AND status IN ('FT','AET','PEN')
               AND home_goals IS NOT NULL AND away_goals IS NOT NULL
@@ -278,6 +280,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     score_top1_correct = score_top5_correct = score_graded = 0
     corner_graded = 0
     skipped_insufficient_history = 0
+    advanced_feature_coverage = {name: {"home_samples": 0, "away_samples": 0, "both_teams_available": 0} for name in METRIC_KEYS}
+    advanced_feature_matches = 0
     evaluated = 0
     brier_sum = log_loss_sum = baseline_brier_sum = baseline_log_loss_sum = 0.0
     daily_groups = defaultdict(list)
@@ -321,6 +325,13 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 continue
 
             markets = forecast["markets"]
+            advanced_features = build_match_advanced_features(home_history, away_history)
+            advanced_feature_matches += 1
+            for metric, coverage in advanced_features["coverage"].items():
+                item = advanced_feature_coverage[metric]
+                item["home_samples"] += int(coverage["home_samples"] > 0)
+                item["away_samples"] += int(coverage["away_samples"] > 0)
+                item["both_teams_available"] += int(coverage["available_for_both"])
             actual_home, actual_away = int(row["home_goals"]), int(row["away_goals"])
             ml_features = build_model_features(home_profile, away_profile, forecast["home_xg"], forecast["away_xg"])
             pending_ml_training_rows.append((json.dumps(ml_features, sort_keys=True), actual_home, actual_away))
@@ -638,23 +649,22 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             home_key, away_key = _team_key(row["home_team"]), _team_key(row["away_team"])
             if not home_key or not away_key or home_key == away_key:
                 continue
-            try:
-                corner_data = json.loads(row["stats_json"] or "{}")
-            except (TypeError, ValueError):
-                corner_data = {}
-            try:
-                hc, ac = corner_data.get("home_corners"), corner_data.get("away_corners")
-                hc = float(hc) if hc is not None else None
-                ac = float(ac) if ac is not None else None
-            except (TypeError, ValueError):
-                hc = ac = None
+            match_metrics = extract_match_team_metrics(
+                row["stats_json"], row["home_team_id"], row["away_team_id"]
+            )
+            hc = match_metrics["home"].get("corners")
+            ac = match_metrics["away"].get("corners")
             histories[home_key].append({
                 "scored": int(row["home_goals"]), "conceded": int(row["away_goals"]),
                 "corners_for": hc, "corners_against": ac,
+                "advanced_for": match_metrics["home"],
+                "advanced_against": match_metrics["away"],
             })
             histories[away_key].append({
                 "scored": int(row["away_goals"]), "conceded": int(row["home_goals"]),
                 "corners_for": ac, "corners_against": hc,
+                "advanced_for": match_metrics["away"],
+                "advanced_against": match_metrics["home"],
             })
         if max_matches is not None and evaluated >= int(max_matches):
             break
@@ -778,6 +788,13 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         "live_calibration_profile": live_calibration_profile,
         "competition_diagnostics": competition_diagnostics,
         "evaluated_matches": evaluated,
+        "advanced_metrics_features": {
+            "evaluated_matches": advanced_feature_matches,
+            "by_metric": advanced_feature_coverage,
+            "window": 10,
+            "missing_values": "Preserved as unavailable; never imputed as zero",
+            "leakage_control": "Only completed matches from earlier calendar dates enter rolling histories",
+        },
         "skipped_insufficient_history": skipped_insufficient_history,
         "accuracy_1x2": market_stats["1X2"]["correct"] / market_stats["1X2"]["graded"],
         "brier_score_1x2": brier_sum / evaluated,
