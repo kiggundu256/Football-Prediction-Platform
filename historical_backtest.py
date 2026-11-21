@@ -12,6 +12,7 @@ from math import log, sqrt
 from model_ensemble import predict_ensemble
 from corners_engine import predict_corner_markets
 from machine_learning import build_model_features, predict_outcome, train_outcome_model
+from elo_rating import EloRatingSystem
 
 
 def _team_key(name):
@@ -236,6 +237,10 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         db.close()
 
     histories = defaultdict(list)
+    elo = EloRatingSystem()
+    elo_evaluated = 0
+    elo_brier_sum = elo_log_loss_sum = 0.0
+    elo_correct = 0
     league_outcomes = defaultdict(lambda: [0, 0, 0])
     by_competition = defaultdict(lambda: {
         "matches": 0, "model_correct": 0, "model_brier_sum": 0.0,
@@ -289,6 +294,14 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 ml_retrain_count += 1
         pending_ml_training_rows = []
         pending_market_calibration = defaultdict(list)
+        # Update Elo only after all forecasts for this date have been produced.
+        for row in day_rows:
+            elo.update(
+                str(row["competition"] or "Unknown"),
+                row["home_team"], row["away_team"],
+                int(row["home_goals"]), int(row["away_goals"]),
+            )
+
         for row in day_rows:
             home_key, away_key = _team_key(row["home_team"]), _team_key(row["away_team"])
             if not home_key or not away_key or home_key == away_key:
@@ -302,8 +315,14 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 skipped_insufficient_history += 1
                 continue
 
+            competition_name = str(row["competition"] or "Unknown")
+            home_elo = elo.rating(competition_name, row["home_team"])
+            away_elo = elo.rating(competition_name, row["away_team"])
             try:
-                forecast = predict_ensemble(home_profile, away_profile)
+                forecast = predict_ensemble(
+                    home_profile, away_profile,
+                    elo_home_rating=home_elo, elo_away_rating=away_elo,
+                )
             except (KeyError, TypeError, ValueError, OverflowError):
                 skipped_insufficient_history += 1
                 continue
@@ -376,9 +395,21 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 pending_outcome_calibration[key].append(
                     (raw_probability, key == outcome_keys[actual_outcome])
                 )
+            elo_component = forecast.get("elo_model") or {}
+            if elo_component:
+                elo_probs = [float(elo_component[key]) for key in outcome_keys]
+                elo_prediction = max(range(3), key=lambda index: elo_probs[index])
+                elo_brier_sum += sum(
+                    (elo_probs[i] - (1.0 if i == actual_outcome else 0.0)) ** 2
+                    for i in range(3)
+                ) / 3.0
+                elo_log_loss_sum += -log(max(elo_probs[actual_outcome], 1e-15))
+                elo_correct += int(elo_prediction == actual_outcome)
+                elo_evaluated += 1
             component_models = {
                 "Goal distribution": forecast.get("goal_model", {}),
                 "Recent form": forecast.get("form_model", {}),
+                "Elo strength": elo_component,
                 "Ensemble": calibrated_ensemble,
             }
             for model_name, component in component_models.items():
@@ -789,6 +820,17 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 or name.startswith("Away team corners ")
             },
             "leakage_control": "Only completed matches from earlier calendar days are used.",
+        },
+        "elo_walk_forward": {
+            "status": "Evaluated" if elo_evaluated else "No eligible matches",
+            "matches": elo_evaluated,
+            "accuracy": elo_correct / elo_evaluated if elo_evaluated else None,
+            "brier_score": elo_brier_sum / elo_evaluated if elo_evaluated else None,
+            "log_loss": elo_log_loss_sum / elo_evaluated if elo_evaluated else None,
+            "initial_rating": 1500,
+            "home_advantage_points": 65,
+            "k_factor": 24,
+            "leakage_control": "Each date is forecast before any result from that date updates Elo ratings.",
         },
         "by_model": [{
             "model": name,
