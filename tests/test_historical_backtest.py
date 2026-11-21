@@ -294,7 +294,7 @@ class HistoricalBacktestTests(unittest.TestCase):
             "accuracy_1x2": 0.48,
             "brier_score_1x2": 0.21,
             "log_loss_1x2": 1.00,
-            "draw_audit": {"brier_score": 0.18, "log_loss": 0.55},
+            "draw_audit": {"brier_score": 0.18, "log_loss": 0.55, "raw_brier_score": 0.18, "raw_log_loss": 0.55},
         }
         candidate = {
             "evaluated_matches": 50,
