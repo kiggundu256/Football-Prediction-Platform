@@ -263,16 +263,43 @@ class Store:
                 (cache_key, json.dumps(data), datetime.now(timezone.utc).isoformat()))
 
     def training_records(self):
-        """Train from imported historical matches; fall back to verified settled forecasts."""
+        """Build historical ML examples and retain an honest readiness diagnostic."""
+        from collections import Counter
         historical_rows = build_historical_training_rows(
             self.path, from_year=2020, minimum_history=5, max_samples=4000
         )
-        if len(historical_rows) >= 200:
+        counts = Counter(
+            "Home" if row[1] > row[2] else ("Away" if row[1] < row[2] else "Draw")
+            for row in historical_rows
+        )
+        self.training_data_report = {
+            "source": "Imported historical matches (2020+)",
+            "examples": len(historical_rows),
+            "home": counts["Home"],
+            "draw": counts["Draw"],
+            "away": counts["Away"],
+            "minimum_examples": 200,
+            "minimum_per_class": 10,
+            "ready": len(historical_rows) >= 200 and all(counts[name] >= 10 for name in ("Home", "Draw", "Away")),
+        }
+        if historical_rows:
             return historical_rows
         with self.connect() as db:
-            return db.execute("""SELECT features_json, actual_home_goals, actual_away_goals
+            fallback = db.execute("""SELECT features_json, actual_home_goals, actual_away_goals
                 FROM prediction_runs WHERE is_demo = 0 AND result_status = 'settled'
                 AND features_json IS NOT NULL AND features_json != '{}'""").fetchall()
+        fallback_counts = Counter(
+            "Home" if row[1] > row[2] else ("Away" if row[1] < row[2] else "Draw")
+            for row in fallback if row[1] is not None and row[2] is not None
+        )
+        self.training_data_report.update({
+            "source": "Settled real predictions (fallback; no historical examples qualified)",
+            "examples": len(fallback),
+            "home": fallback_counts["Home"], "draw": fallback_counts["Draw"],
+            "away": fallback_counts["Away"],
+            "ready": len(fallback) >= 200 and all(fallback_counts[name] >= 10 for name in ("Home", "Draw", "Away")),
+        })
+        return fallback
 
     def predicted_fixture_ids(self):
         """Return provider fixture IDs that already have a saved real prediction."""
@@ -2851,6 +2878,8 @@ class MainWindow(QMainWindow):
                 self._local_ml_model_cache_loaded = True
             local_ml = self._local_ml_model_cache
         ml_probabilities = predict_outcome(local_ml, model_features) if local_ml else None
+        training_report = getattr(self.store, "training_data_report", {})
+
         injuries_data = self.store.get_provider_cache(f"injuries:{selected_fixture_id}", 30 * 60)
         lineups_data = self.store.get_provider_cache(f"lineups:{selected_fixture_id}", 10 * 60)
         weather_data = None
@@ -3201,7 +3230,10 @@ class MainWindow(QMainWindow):
                 f"Models: {markets.get('model', 'Poisson baseline')}\\n"
                 f"Completed matches per team: {quality.get('minimum_team_sample', 0)}\\n"
                 f"Confidence band: {quality.get('confidence_band', 'Not assessed')}\\n"
-                f"Trained local ML: {'Active' if quality.get('trained_ml_model') else 'Waiting for 200 settled examples'}\\n"
+                f"Trained local ML: {'Active' if quality.get('trained_ml_model') else 'Not active'}\\n"
+                f"Training data: {getattr(self.store, 'training_data_report', {}).get('source', 'Not loaded')}\\n"
+                f"Training examples: {getattr(self.store, 'training_data_report', {}).get('examples', 0):,} / 200 minimum\\n"
+                f"Class counts (Home / Draw / Away): {getattr(self.store, 'training_data_report', {}).get('home', 0):,} / {getattr(self.store, 'training_data_report', {}).get('draw', 0):,} / {getattr(self.store, 'training_data_report', {}).get('away', 0):,} (minimum 10 each)\\n"
                 f"Probability calibration: {(markets.get('calibration_status') or {}).get('state', 'NOT RUN')} — "
                 f"{(markets.get('calibration_status') or {}).get('message', 'No calibration status available')}\\n"
                 f"Historical confidence reliability: " + "; ".join(
