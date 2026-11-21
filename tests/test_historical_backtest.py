@@ -59,6 +59,11 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertEqual(result["source_completed_matches"], 7)
         self.assertEqual(result["evaluated_matches"], 2)
         self.assertEqual(result["skipped_insufficient_history"], 5)
+        advanced = result["advanced_metrics_features"]
+        self.assertEqual(advanced["evaluated_matches"], 2)
+        self.assertEqual(advanced["by_metric"]["corners"]["both_teams_available"], 2)
+        self.assertEqual(advanced["by_metric"]["xg"]["both_teams_available"], 0)
+        self.assertIn("earlier calendar dates", advanced["leakage_control"])
         self.assertIn("1X2", result["by_market"])
         self.assertEqual(
             {item["model"] for item in result["by_model"]},
