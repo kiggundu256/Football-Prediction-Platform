@@ -1040,7 +1040,7 @@ def run_draw_probability_experiment(database_path, from_year=2020,
             "on identical coverage; review threshold, calibration and competition diagnostics before promotion."
             if passed else
             "Do not promote. The candidate must improve overall 1X2 and both calibrated and raw "
-            "draw Brier score and log loss on identical evaluation coverage."
+            "draw-specific Brier score and log loss on identical evaluation coverage."
         ),
         "methodology": (
             "The only changed variable is the draw probability used by the recent-form "
