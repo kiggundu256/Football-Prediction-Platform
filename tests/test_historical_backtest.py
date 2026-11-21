@@ -290,5 +290,33 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("same-day", audit["leakage_control"])
         self.assertIn("identical", audit["comparison"])
 
+
+    def test_same_day_fixtures_share_pre_day_elo_ratings(self):
+        from unittest.mock import patch
+        import historical_backtest
+
+        class RecordingElo:
+            def __init__(self):
+                self.updates = []
+                self.rating_snapshots = []
+
+            def rating(self, competition, team):
+                self.rating_snapshots.append(len(self.updates))
+                return 1500.0
+
+            def update(self, competition, home, away, home_goals, away_goals):
+                self.updates.append((competition, home, away, home_goals, away_goals))
+
+        recorder = RecordingElo()
+        with patch.object(historical_backtest, "EloRatingSystem", return_value=recorder):
+            run_historical_backtest(self.path, from_year=2020, minimum_history=5)
+
+        # Four rating reads belong to the two fixtures on the shared evaluation
+        # date. None may observe an update from another fixture on that date.
+        self.assertEqual(len(recorder.rating_snapshots), 4)
+        self.assertEqual(len(set(recorder.rating_snapshots)), 1)
+        self.assertEqual(len(recorder.updates), 7)
+
+
 if __name__ == "__main__":
     unittest.main()
