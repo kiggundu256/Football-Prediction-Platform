@@ -34,7 +34,10 @@ from head_to_head import summarize_head_to_head
 from ui_theme import APP_STYLESHEET
 from settlement import settle_markets
 from performance_metrics import summarize_performance
-from historical_backtest import run_historical_backtest
+from historical_backtest import (
+    run_historical_backtest, run_profile_weighting_experiment,
+    run_draw_probability_experiment,
+)
 from probability_calibration import apply_live_calibration
 from fixture_view import filter_fixtures, competition_options, fixture_status_group
 from historical_database import HistoricalDatabase, MAJOR_COMPETITIONS
@@ -312,6 +315,50 @@ class HistoricalBacktestWorker(QThread):
     def run(self):
         try:
             result = run_historical_backtest(
+                self.database_path,
+                from_year=self.from_year,
+                minimum_history=self.minimum_history,
+            )
+            self.completed.emit(result)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class ProfileWeightingExperimentWorker(QThread):
+    completed = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, database_path, from_year, minimum_history):
+        super().__init__()
+        self.database_path = database_path
+        self.from_year = from_year
+        self.minimum_history = minimum_history
+
+    def run(self):
+        try:
+            result = run_profile_weighting_experiment(
+                self.database_path,
+                from_year=self.from_year,
+                minimum_history=self.minimum_history,
+            )
+            self.completed.emit(result)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class DrawProbabilityExperimentWorker(QThread):
+    completed = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, database_path, from_year, minimum_history):
+        super().__init__()
+        self.database_path = database_path
+        self.from_year = from_year
+        self.minimum_history = minimum_history
+
+    def run(self):
+        try:
+            result = run_draw_probability_experiment(
                 self.database_path,
                 from_year=self.from_year,
                 minimum_history=self.minimum_history,
@@ -3591,6 +3638,95 @@ class MainWindow(QMainWindow):
         self.backtest_status = QLabel("Not run yet. This test reads your imported history and does not modify it.")
         self.backtest_status.setWordWrap(True)
         box.addWidget(self.backtest_status)
+        self.profile_experiment_button = QPushButton("Compare Baseline vs Recency-Weighted")
+        self.profile_experiment_button.clicked.connect(self.run_profile_weighting_experiment_ui)
+        box.addWidget(self.profile_experiment_button)
+        self.profile_experiment_result = QLabel(
+            "Profile experiment not run. This compares two isolated walk-forward strategies "
+            "on the same historical dates; it does not change production predictions."
+        )
+        self.profile_experiment_result.setWordWrap(True)
+        self.profile_experiment_result.setStyleSheet(
+            "color:#C7D7EF;padding:10px;background:#111D30;border:1px solid #26364D;border-radius:7px"
+        )
+        box.addWidget(self.profile_experiment_result)
+        self.draw_experiment_button = QPushButton("Audit Fixed Draw Probability vs Goal-Anchored Draw")
+        self.draw_experiment_button.clicked.connect(self.run_draw_probability_experiment_ui)
+        box.addWidget(self.draw_experiment_button)
+        self.draw_experiment_result = QLabel(
+            "Draw-formula audit not run. This tests the fixed 25% draw prior against the "
+            "goal-distribution draw probability without changing production predictions."
+        )
+        self.draw_experiment_result.setWordWrap(True)
+        self.draw_experiment_result.setStyleSheet(
+            "color:#C7D7EF;padding:10px;background:#111D30;border:1px solid #26364D;border-radius:7px"
+        )
+        box.addWidget(self.draw_experiment_result)
+
+        self.draw_audit_metrics_table = QTableWidget(0, 3)
+        self.draw_audit_metrics_table.setHorizontalHeaderLabels(["Draw-specific metric", "Fixed 25% baseline", "Goal-anchored candidate"])
+        self.draw_audit_calibration_table = QTableWidget(0, 9)
+        self.draw_audit_calibration_table.setHorizontalHeaderLabels([
+            "Probability bin", "Baseline n", "Baseline avg p", "Baseline observed", "Baseline gap",
+            "Candidate n", "Candidate avg p", "Candidate observed", "Candidate gap"
+        ])
+        self.draw_audit_period_table = QTableWidget(0, 10)
+        self.draw_audit_period_table.setHorizontalHeaderLabels([
+            "Period / competition-season", "Baseline n", "Baseline draw rate", "Baseline Brier", "Baseline log loss",
+            "Candidate n", "Candidate draw rate", "Candidate Brier", "Candidate log loss", "Brier improvement"
+        ])
+        for table in (self.draw_audit_metrics_table, self.draw_audit_calibration_table, self.draw_audit_period_table):
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+            table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+            table.setMaximumHeight(260)
+            table.horizontalHeader().setStretchLastSection(True)
+            box.addWidget(table)
+
+        draw_detail_title = QLabel("Draw experiment — baseline vs candidate diagnostics")
+        draw_detail_title.setStyleSheet("font-size:15px;font-weight:700;color:#168BFF")
+        box.addWidget(draw_detail_title)
+        draw_detail_note = QLabel(
+            "These tables belong to the draw-formula experiment above (not the separate historical backtest). "
+            "They compare both strategies on the same evaluated fixtures. Empty bins are omitted."
+        )
+        draw_detail_note.setWordWrap(True)
+        box.addWidget(draw_detail_note)
+
+        self.draw_market_table = QTableWidget(0, 10)
+        self.draw_market_table.setHorizontalHeaderLabels([
+            "Market / event", "Graded", "Baseline accuracy", "Candidate accuracy",
+            "Baseline observed rate", "Candidate observed rate",
+            "Baseline calibrated Brier", "Candidate calibrated Brier",
+            "Baseline raw Brier", "Candidate raw Brier"
+        ])
+        self.draw_calibration_table = QTableWidget(0, 11)
+        self.draw_calibration_table.setHorizontalHeaderLabels([
+            "Market / event", "Probability set", "Confidence range", "Baseline n",
+            "Baseline avg probability", "Baseline observed rate", "Baseline gap",
+            "Candidate n", "Candidate avg probability", "Candidate observed rate", "Candidate gap"
+        ])
+        self.draw_comp_table = QTableWidget(0, 8)
+        self.draw_comp_table.setHorizontalHeaderLabels([
+            "Competition / season", "Baseline matches", "Candidate matches",
+            "Baseline accuracy", "Candidate accuracy", "Baseline Brier",
+            "Candidate Brier", "Brier improvement"
+        ])
+        for table in (self.draw_market_table, self.draw_calibration_table, self.draw_comp_table):
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+            table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+            table.setMaximumHeight(260)
+            table.horizontalHeader().setStretchLastSection(True)
+            box.addWidget(table)
+
+        draw_copy_row = QHBoxLayout()
+        self.draw_details_copy_button = QPushButton("Copy All Draw Experiment Details")
+        self.draw_details_copy_button.clicked.connect(self.copy_draw_experiment_details)
+        draw_copy_row.addWidget(self.draw_details_copy_button)
+        draw_copy_row.addStretch()
+        box.addLayout(draw_copy_row)
+
         backtest_cards = QGridLayout()
         self.backtest_source_card = Card("COMPLETED SOURCE MATCHES", "—", "From selected start year")
         self.backtest_evaluated_card = Card("MATCHES EVALUATED", "—", "Enough prior team history")
@@ -3773,6 +3909,319 @@ class MainWindow(QMainWindow):
     def historical_backtest_failed(self, message):
         self.backtest_status.setText("Backtest failed: " + message)
         QMessageBox.warning(self, "Historical backtest", message)
+
+    def run_profile_weighting_experiment_ui(self):
+        if getattr(self, "profile_experiment_worker", None) and self.profile_experiment_worker.isRunning():
+            return
+        self.profile_experiment_button.setEnabled(False)
+        self.profile_experiment_result.setText(
+            "Experiment running: baseline and recency-weighted models are being evaluated "
+            "chronologically against the same local historical database. The app remains responsive."
+        )
+        self.profile_experiment_worker = ProfileWeightingExperimentWorker(
+            self.store.path,
+            self.backtest_from_year.value(),
+            self.backtest_min_history.value(),
+        )
+        self.profile_experiment_worker.completed.connect(self.display_profile_weighting_experiment)
+        self.profile_experiment_worker.failed.connect(self.profile_weighting_experiment_failed)
+        self.profile_experiment_worker.finished.connect(
+            lambda: self.profile_experiment_button.setEnabled(True)
+        )
+        self.profile_experiment_worker.start()
+
+    def profile_weighting_experiment_failed(self, message):
+        self.profile_experiment_result.setText("Profile experiment failed: " + message)
+        QMessageBox.warning(self, "Profile weighting experiment", message)
+
+    def display_profile_weighting_experiment(self, result):
+        baseline = result.get("baseline", {})
+        candidate = result.get("recency_weighted", {})
+        delta = result.get("delta_candidate_minus_baseline", {})
+        def metric(value, digits=4):
+            return f"{float(value):.{digits}f}" if value is not None else "—"
+        def percent(value):
+            return f"{float(value):.1%}" if value is not None else "—"
+        same_coverage = bool(result.get("same_evaluation_coverage"))
+        coverage_note = (
+            "Same evaluation coverage." if same_coverage
+            else "WARNING: evaluation coverage differs; do not compare these scores as a fair head-to-head."
+        )
+        self.profile_experiment_result.setText(
+            "BASELINE vs RECENCY-WEIGHTED PROFILE EXPERIMENT\\n"
+            f"Period: {result.get('from_year')}+ | Minimum prior matches/team: "
+            f"{result.get('minimum_history')}\\n"
+            f"Evaluated matches: baseline {baseline.get('evaluated_matches', 0):,} | "
+            f"candidate {candidate.get('evaluated_matches', 0):,} | {coverage_note}\\n"
+            f"1X2 accuracy: {percent(baseline.get('accuracy_1x2'))} → "
+            f"{percent(candidate.get('accuracy_1x2'))} "
+            f"(candidate change {percent(delta.get('accuracy_1x2')) if delta.get('accuracy_1x2') is not None else '—'})\\n"
+            f"Brier score: {metric(baseline.get('brier_score_1x2'))} → "
+            f"{metric(candidate.get('brier_score_1x2'))} "
+            f"(improvement {metric(delta.get('brier_improvement'))})\\n"
+            f"Log loss: {metric(baseline.get('log_loss_1x2'))} → "
+            f"{metric(candidate.get('log_loss_1x2'))} "
+            f"(improvement {metric(delta.get('log_loss_improvement'))})\\n"
+            f"Promotion gate: {'PASSED — review market/competition breakdowns before any promotion' if result.get('promotion_gate_passed') else 'NOT PASSED — keep the current production profile'}\\n"
+            f"{result.get('recommendation', '')}\\n"
+            "This is an isolated experiment. Production predictions have not been changed."
+        )
+
+    @staticmethod
+    def _fill_experiment_table(table, headers, rows):
+        table.setRowCount(len(rows))
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        for row_index, values in enumerate(rows):
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem("" if value is None else str(value))
+                table.setItem(row_index, column_index, item)
+        table.resizeColumnsToContents()
+
+    @staticmethod
+    def _experiment_number(value, digits=4, percent=False):
+        if value is None:
+            return "—"
+        number = float(value)
+        return f"{number:.1%}" if percent else f"{number:.{digits}f}"
+
+    def copy_draw_experiment_details(self):
+        tables = [
+            ("SUMMARY", self.draw_experiment_result),
+            ("MARKET COMPARISON", self.draw_market_table),
+            ("CALIBRATION COMPARISON", self.draw_calibration_table),
+            ("COMPETITION / SEASON COMPARISON", self.draw_comp_table),
+            ("DRAW-SPECIFIC METRICS", self.draw_audit_metrics_table),
+            ("DRAW CALIBRATION", self.draw_audit_calibration_table),
+            ("DRAW PERIOD AND COMPETITION", self.draw_audit_period_table),
+        ]
+        sections = []
+        for title, table_or_label in tables:
+            if isinstance(table_or_label, QLabel):
+                sections.append(title + "\n" + table_or_label.text())
+                continue
+            headers = [
+                table_or_label.horizontalHeaderItem(i).text()
+                if table_or_label.horizontalHeaderItem(i) else ""
+                for i in range(table_or_label.columnCount())
+            ]
+            lines = ["\t".join(headers)]
+            for row in range(table_or_label.rowCount()):
+                lines.append("\t".join(
+                    table_or_label.item(row, col).text()
+                    if table_or_label.item(row, col) else ""
+                    for col in range(table_or_label.columnCount())
+                ))
+            sections.append(title + "\n" + "\n".join(lines))
+        QApplication.clipboard().setText("\n\n".join(sections))
+        QMessageBox.information(
+            self, "Draw experiment copied",
+            "The summary and all three comparison tables have been copied. Paste the results into this chat."
+        )
+
+    def run_draw_probability_experiment_ui(self):
+        if getattr(self, "draw_experiment_worker", None) and self.draw_experiment_worker.isRunning():
+            return
+        self.draw_experiment_button.setEnabled(False)
+        self.draw_experiment_result.setText(
+            "Formula audit running: fixed-draw and goal-anchored candidates are being "
+            "evaluated on identical chronological fixtures. The app remains responsive."
+        )
+        self.draw_experiment_worker = DrawProbabilityExperimentWorker(
+            self.store.path,
+            self.backtest_from_year.value(),
+            self.backtest_min_history.value(),
+        )
+        self.draw_experiment_worker.completed.connect(self.display_draw_probability_experiment)
+        self.draw_experiment_worker.failed.connect(self.draw_probability_experiment_failed)
+        self.draw_experiment_worker.finished.connect(
+            lambda: self.draw_experiment_button.setEnabled(True)
+        )
+        self.draw_experiment_worker.start()
+
+    def draw_probability_experiment_failed(self, message):
+        self.draw_experiment_result.setText("Draw-probability experiment failed: " + message)
+        QMessageBox.warning(self, "Draw-probability experiment", message)
+
+    def display_draw_probability_experiment(self, result):
+        baseline = result.get("baseline", {})
+        candidate = result.get("goal_anchored", {})
+        delta = result.get("delta_candidate_minus_baseline", {})
+        def metric(value, digits=4):
+            return f"{float(value):.{digits}f}" if value is not None else "—"
+        def percent(value):
+            return f"{float(value):.1%}" if value is not None else "—"
+        coverage = (
+            "Same evaluation coverage." if result.get("same_evaluation_coverage")
+            else "WARNING: evaluation coverage differs; do not compare these scores."
+        )
+        self.draw_experiment_result.setText(
+            "FIXED 25% DRAW vs GOAL-ANCHORED DRAW EXPERIMENT\\n"
+            f"Period: {result.get('from_year')}+ | Minimum prior matches/team: "
+            f"{result.get('minimum_history')}\\n"
+            f"Evaluated matches: baseline {baseline.get('evaluated_matches', 0):,} | "
+            f"candidate {candidate.get('evaluated_matches', 0):,} | {coverage}\\n"
+            f"1X2 accuracy: {percent(baseline.get('accuracy_1x2'))} → "
+            f"{percent(candidate.get('accuracy_1x2'))} "
+            f"(candidate change {percent(delta.get('accuracy_1x2')) if delta.get('accuracy_1x2') is not None else '—'})\\n"
+            f"Brier score: {metric(baseline.get('brier_score_1x2'))} → "
+            f"{metric(candidate.get('brier_score_1x2'))} "
+            f"(improvement {metric(delta.get('brier_improvement'))})\\n"
+            f"Log loss: {metric(baseline.get('log_loss_1x2'))} → "
+            f"{metric(candidate.get('log_loss_1x2'))} "
+            f"(improvement {metric(delta.get('log_loss_improvement'))})\\n"
+            f"Promotion gate: {'PASSED — review market/competition breakdowns before any promotion' if result.get('promotion_gate_passed') else 'NOT PASSED — keep current production formula'}\\n"
+            f"{result.get('recommendation', '')}\\n"
+            "Isolated formula audit only. Production predictions have not been changed."
+        )
+
+        def pct(value):
+            return "—" if value is None else f"{float(value):.3%}"
+        def num(value):
+            return self._experiment_number(value)
+        base_draw = baseline.get("draw_audit", {})
+        cand_draw = candidate.get("draw_audit", {})
+        draw_metric_rows = []
+        for label, key, formatter in (
+            ("Matches graded", "graded", lambda v: f"{int(v):,}" if v is not None else "—"),
+            ("Actual draw frequency", "observed_draw_rate", pct),
+            ("Mean predicted draw probability", "mean_predicted_draw_probability", pct),
+            ("Draw classification accuracy", "prediction_accuracy", pct),
+            ("Draw precision", "precision", pct),
+            ("Draw recall", "recall", pct),
+            ("Draw F1 score", "f1_score", num),
+            ("Draw Brier score (calibrated)", "brier_score", num),
+            ("Draw log loss (calibrated)", "log_loss", num),
+            ("Draw Brier score (raw)", "raw_brier_score", num),
+            ("Draw log loss (raw)", "raw_log_loss", num),
+            ("True positives / false positives / false negatives", "confusion", str),
+        ):
+            left = (f"{base_draw.get('true_positives', 0)} / {base_draw.get('false_positives', 0)} / {base_draw.get('false_negatives', 0)}"
+                    if key == "confusion" else formatter(base_draw.get(key)))
+            right = (f"{cand_draw.get('true_positives', 0)} / {cand_draw.get('false_positives', 0)} / {cand_draw.get('false_negatives', 0)}"
+                     if key == "confusion" else formatter(cand_draw.get(key)))
+            draw_metric_rows.append([label, left, right])
+        self._fill_experiment_table(
+            self.draw_audit_metrics_table,
+            ["Draw-specific metric", "Fixed 25% baseline", "Goal-anchored candidate"],
+            draw_metric_rows,
+        )
+
+        base_bins = base_draw.get("calibration", [])
+        cand_bins = cand_draw.get("calibration", [])
+        draw_bin_rows = []
+        for index in range(max(len(base_bins), len(cand_bins))):
+            left = base_bins[index] if index < len(base_bins) else {}
+            right = cand_bins[index] if index < len(cand_bins) else {}
+            if not left.get("count") and not right.get("count"):
+                continue
+            draw_bin_rows.append([
+                left.get("range") or right.get("range") or "",
+                left.get("count", 0), pct(left.get("mean_probability")), pct(left.get("observed_rate")), pct(left.get("signed_gap")),
+                right.get("count", 0), pct(right.get("mean_probability")), pct(right.get("observed_rate")),
+                pct(right.get("signed_gap")),
+            ])
+        self._fill_experiment_table(
+            self.draw_audit_calibration_table,
+            ["Probability bin", "Baseline n", "Baseline avg p", "Baseline observed", "Baseline gap",
+             "Candidate n", "Candidate avg p", "Candidate observed", "Candidate gap"],
+            draw_bin_rows,
+        )
+
+        base_periods = {str(item.get("year")): item for item in base_draw.get("by_year", [])}
+        cand_periods = {str(item.get("year")): item for item in cand_draw.get("by_year", [])}
+        base_periods.update({item.get("competition_season"): item for item in base_draw.get("by_competition_season", [])})
+        cand_periods.update({item.get("competition_season"): item for item in cand_draw.get("by_competition_season", [])})
+        period_rows = []
+        for name in sorted(set(base_periods) | set(cand_periods)):
+            left, right = base_periods.get(name, {}), cand_periods.get(name, {})
+            gain = (float(left["brier_score"]) - float(right["brier_score"])
+                    if left.get("brier_score") is not None and right.get("brier_score") is not None else None)
+            period_rows.append([
+                name, left.get("matches", 0), pct(left.get("actual_draw_rate")), num(left.get("brier_score")), num(left.get("log_loss")),
+                right.get("matches", 0), pct(right.get("actual_draw_rate")), num(right.get("brier_score")), num(right.get("log_loss")), num(gain),
+            ])
+        self._fill_experiment_table(
+            self.draw_audit_period_table,
+            ["Period / competition-season", "Baseline n", "Baseline draw rate", "Baseline Brier", "Baseline log loss",
+             "Candidate n", "Candidate draw rate", "Candidate Brier", "Candidate log loss", "Brier improvement"],
+            period_rows,
+        )
+
+        baseline_markets = baseline.get("by_market", {})
+        candidate_markets = candidate.get("by_market", {})
+        market_rows = []
+        for name in sorted(set(baseline_markets) | set(candidate_markets)):
+            left, right = baseline_markets.get(name, {}), candidate_markets.get(name, {})
+            market_rows.append([
+                name, left.get("graded", 0), pct(left.get("selection_accuracy", left.get("accuracy"))),
+                pct(right.get("selection_accuracy", right.get("accuracy"))),
+                pct(left.get("observed_event_rate")), pct(right.get("observed_event_rate")),
+                num(left.get("brier_score")), num(right.get("brier_score")),
+                num(left.get("raw_brier_score")), num(right.get("raw_brier_score")),
+            ])
+        self._fill_experiment_table(
+            self.draw_market_table, [
+                "Market / event", "Graded", "Baseline accuracy", "Candidate accuracy",
+                "Baseline observed rate", "Candidate observed rate",
+                "Baseline calibrated Brier", "Candidate calibrated Brier",
+                "Baseline raw Brier", "Candidate raw Brier"
+            ], market_rows
+        )
+
+        calibration_rows = []
+        base_cal = baseline.get("calibration_by_market", {})
+        cand_cal = candidate.get("calibration_by_market", {})
+        for market in sorted(set(base_cal) | set(cand_cal)):
+            base_bins, cand_bins = base_cal.get(market, []), cand_cal.get(market, [])
+            for index in range(max(len(base_bins), len(cand_bins))):
+                left = base_bins[index] if index < len(base_bins) else {}
+                right = cand_bins[index] if index < len(cand_bins) else {}
+                if not left.get("count") and not right.get("count"):
+                    continue
+                calibration_rows.append([
+                    market, "Calibrated", left.get("range") or right.get("range") or "",
+                    left.get("count", 0), pct(left.get("mean_probability")),
+                    pct(left.get("observed_rate")), pct(left.get("signed_gap")),
+                    right.get("count", 0), pct(right.get("mean_probability")),
+                    pct(right.get("observed_rate")), pct(right.get("signed_gap")),
+                ])
+        self._fill_experiment_table(
+            self.draw_calibration_table, [
+                "Market / event", "Probability set", "Confidence range", "Baseline n",
+                "Baseline avg probability", "Baseline observed rate", "Baseline gap",
+                "Candidate n", "Candidate avg probability", "Candidate observed rate", "Candidate gap"
+            ], calibration_rows
+        )
+
+        base_comps = {
+            item.get("competition_season"): item
+            for item in baseline.get("by_competition_season", [])
+        }
+        cand_comps = {
+            item.get("competition_season"): item
+            for item in candidate.get("by_competition_season", [])
+        }
+        competition_rows = []
+        for name in sorted(set(base_comps) | set(cand_comps)):
+            left, right = base_comps.get(name, {}), cand_comps.get(name, {})
+            brier_gain = (
+                float(left["brier_score"]) - float(right["brier_score"])
+                if left.get("brier_score") is not None and right.get("brier_score") is not None
+                else None
+            )
+            competition_rows.append([
+                name, left.get("matches", 0), right.get("matches", 0),
+                pct(left.get("accuracy")), pct(right.get("accuracy")),
+                num(left.get("brier_score")), num(right.get("brier_score")), num(brier_gain),
+            ])
+        self._fill_experiment_table(
+            self.draw_comp_table, [
+                "Competition / season", "Baseline matches", "Candidate matches",
+                "Baseline accuracy", "Candidate accuracy", "Baseline Brier",
+                "Candidate Brier", "Brier improvement"
+            ], competition_rows
+        )
 
     def copy_historical_backtest_summary(self):
         """Copy a compact summary that is safe to paste into a chat message."""

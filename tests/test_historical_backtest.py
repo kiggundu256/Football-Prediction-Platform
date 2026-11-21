@@ -1,12 +1,13 @@
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from historical_backtest import (
     run_historical_backtest, _prequential_calibrate,
     _prequential_calibrate_from_bins, _calibration_bins,
-    _market_add, _finalize_market_stats,
+    _market_add, _finalize_market_stats, run_draw_probability_experiment,
 )
 
 
@@ -257,11 +258,127 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertFalse(bins[0]["overconfident"])
         self.assertFalse(bins[-1]["overconfident"])
 
+    @patch("historical_backtest.run_historical_backtest")
+    def test_draw_promotion_gate_rejects_worse_draw_scores_even_if_1x2_improves(self, mocked_run):
+        baseline = {
+            "evaluated_matches": 50,
+            "accuracy_1x2": 0.48,
+            "brier_score_1x2": 0.21,
+            "log_loss_1x2": 1.00,
+            "draw_audit": {"brier_score": 0.18, "log_loss": 0.55, "raw_brier_score": 0.18, "raw_log_loss": 0.55},
+        }
+        candidate = {
+            "evaluated_matches": 50,
+            "accuracy_1x2": 0.49,
+            "brier_score_1x2": 0.20,
+            "log_loss_1x2": 0.99,
+            "draw_audit": {"brier_score": 0.19, "log_loss": 0.54, "raw_brier_score": 0.19, "raw_log_loss": 0.54},
+        }
+        mocked_run.side_effect = [baseline, candidate]
+
+        result = run_draw_probability_experiment(self.path, from_year=2020, minimum_history=5)
+
+        self.assertFalse(result["promotion_gate_passed"])
+        self.assertAlmostEqual(
+            result["delta_candidate_minus_baseline"]["draw_brier_improvement"], -0.01
+        )
+        self.assertAlmostEqual(
+            result["delta_candidate_minus_baseline"]["draw_log_loss_improvement"], 0.01
+        )
+        self.assertIn("draw-specific", result["recommendation"])
+
+    @patch("historical_backtest.run_historical_backtest")
+    def test_draw_promotion_gate_requires_both_draw_scores_to_improve(self, mocked_run):
+        baseline = {
+            "evaluated_matches": 50,
+            "accuracy_1x2": 0.48,
+            "brier_score_1x2": 0.21,
+            "log_loss_1x2": 1.00,
+            "draw_audit": {"brier_score": 0.18, "log_loss": 0.55, "raw_brier_score": 0.18, "raw_log_loss": 0.55},
+        }
+        candidate = {
+            "evaluated_matches": 50,
+            "accuracy_1x2": 0.49,
+            "brier_score_1x2": 0.20,
+            "log_loss_1x2": 0.99,
+            "draw_audit": {"brier_score": 0.17, "log_loss": 0.54, "raw_brier_score": 0.17, "raw_log_loss": 0.54},
+        }
+        mocked_run.side_effect = [baseline, candidate]
+
+        result = run_draw_probability_experiment(self.path, from_year=2020, minimum_history=5)
+
+        self.assertTrue(result["promotion_gate_passed"])
+        self.assertGreater(result["delta_candidate_minus_baseline"]["draw_brier_improvement"], 0)
+        self.assertGreater(result["delta_candidate_minus_baseline"]["draw_log_loss_improvement"], 0)
+
+    def test_draw_probability_experiment_preserves_identical_coverage(self):
+        result = run_draw_probability_experiment(
+            self.path, from_year=2020, minimum_history=5
+        )
+        self.assertTrue(result["same_evaluation_coverage"])
+        self.assertEqual(result["baseline"]["evaluated_matches"], 2)
+        self.assertEqual(result["goal_anchored"]["evaluated_matches"], 2)
+        self.assertIn("Production predictions remain unchanged", result["methodology"])
+        self.assertIn("brier_improvement", result["delta_candidate_minus_baseline"])
+        for strategy in ("baseline", "goal_anchored"):
+            audit = result[strategy]["draw_audit"]
+            self.assertEqual(audit["graded"], 2)
+            self.assertIn("precision", audit)
+            self.assertIn("recall", audit)
+            self.assertIn("brier_score", audit)
+            self.assertIn("log_loss", audit)
+            self.assertEqual(sum(item["count"] for item in audit["calibration"]), 2)
+            self.assertEqual(sum(item["matches"] for item in audit["by_year"]), 2)
+            self.assertEqual(sum(item["matches"] for item in audit["by_competition_season"]), 2)
+            self.assertIn("same-day results are withheld", audit["leakage_control"])
+
+    def test_backtest_rejects_unknown_draw_strategy(self):
+        with self.assertRaises(ValueError):
+            run_historical_backtest(
+                self.path, from_year=2020, minimum_history=5,
+                form_draw_strategy="unknown",
+            )
+
     def test_no_evaluation_when_prior_history_is_insufficient(self):
         result = run_historical_backtest(self.path, from_year=2020, minimum_history=6)
         self.assertEqual(result["evaluated_matches"], 0)
         self.assertIn("No matches had enough prior team history", result["message"])
 
+
+    @patch("historical_backtest.run_historical_backtest")
+    def test_draw_promotion_gate_rejects_candidate_with_worse_raw_draw_scores(self, mocked_run):
+        baseline = {
+            "evaluated_matches": 50, "accuracy_1x2": 0.48,
+            "brier_score_1x2": 0.21, "log_loss_1x2": 1.00,
+            "draw_audit": {"brier_score": 0.18, "log_loss": 0.55,
+                           "raw_brier_score": 0.18, "raw_log_loss": 0.55},
+        }
+        candidate = {
+            "evaluated_matches": 50, "accuracy_1x2": 0.49,
+            "brier_score_1x2": 0.20, "log_loss_1x2": 0.99,
+            "draw_audit": {"brier_score": 0.17, "log_loss": 0.54,
+                           "raw_brier_score": 0.19, "raw_log_loss": 0.56},
+        }
+        mocked_run.side_effect = [baseline, candidate]
+        result = run_draw_probability_experiment(self.path, from_year=2020, minimum_history=5)
+        self.assertFalse(result["promotion_gate_passed"])
+        self.assertLess(result["delta_candidate_minus_baseline"]["raw_draw_brier_improvement"], 0)
+        self.assertLess(result["delta_candidate_minus_baseline"]["raw_draw_log_loss_improvement"], 0)
+
+    def test_draw_threshold_sweep_reports_precision_recall_and_f1(self):
+        from historical_backtest import _binary_threshold_sweep
+        rows = _binary_threshold_sweep(
+            [(0.40, True), (0.35, True), (0.30, False), (0.10, False)],
+            thresholds=(0.30, 0.40),
+        )
+        self.assertEqual(rows[0]["true_positives"], 2)
+        self.assertEqual(rows[0]["false_positives"], 1)
+        self.assertAlmostEqual(rows[0]["precision"], 2 / 3)
+        self.assertEqual(rows[0]["recall"], 1.0)
+        self.assertAlmostEqual(rows[0]["f1"], 0.8)
+        self.assertEqual(rows[1]["true_positives"], 1)
+        self.assertEqual(rows[1]["false_negatives"], 1)
+        self.assertAlmostEqual(rows[1]["recall"], 0.5)
 
 if __name__ == "__main__":
     unittest.main()

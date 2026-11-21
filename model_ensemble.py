@@ -22,11 +22,16 @@ def _strength(profile):
     return (points - 1.5) * 0.72 + goal_difference * 0.28
 
 
-def _form_probabilities(home_profile, away_profile, home_advantage=0.12):
+def _form_probabilities(home_profile, away_profile, home_advantage=0.12,
+                        draw_probability=0.25):
+    """Convert relative team strength into 1X2 probabilities.
+
+    The default fixed draw prior preserves the existing production baseline.
+    Experiments may supply a draw probability from the goal-distribution model.
+    """
     difference = _strength(home_profile) - _strength(away_profile) + home_advantage
     home_share = 1.0 / (1.0 + exp(-1.15 * difference))
-    # Keep draw probability anchored to the goal model; split the remaining mass.
-    draw = 0.25
+    draw = _clamp(draw_probability)
     return {
         "home_win": (1.0 - draw) * home_share,
         "draw": draw,
@@ -34,7 +39,7 @@ def _form_probabilities(home_profile, away_profile, home_advantage=0.12):
     }
 
 
-def predict_ensemble(home_profile, away_profile, home_advantage=0.12, ml_probabilities=None, ml_samples=0, context=None):
+def predict_ensemble(home_profile, away_profile, home_advantage=0.12, ml_probabilities=None, ml_samples=0, context=None, form_draw_strategy="baseline"):
     """Return goal probabilities and a blended 1X2 forecast with model evidence."""
     if not home_profile or not away_profile:
         raise ValueError("Both teams need completed historical match profiles.")
@@ -47,7 +52,15 @@ def predict_ensemble(home_profile, away_profile, home_advantage=0.12, ml_probabi
         (float(away_profile["scored_avg"]) + float(home_profile["conceded_avg"])) / 2,
     )
     goal_model = predict_markets(home_xg, away_xg)
-    form_model = _form_probabilities(home_profile, away_profile, home_advantage)
+    if form_draw_strategy == "baseline":
+        form_draw = 0.25
+    elif form_draw_strategy == "goal_anchored":
+        form_draw = goal_model["draw"]
+    else:
+        raise ValueError("form_draw_strategy must be 'baseline' or 'goal_anchored'.")
+    form_model = _form_probabilities(
+        home_profile, away_profile, home_advantage, draw_probability=form_draw
+    )
     # A trained ML model contributes only after enough verified local outcomes exist.
     ml_active = bool(ml_probabilities and all(key in ml_probabilities for key in ("home_win", "draw", "away_win")))
     goal_weight, form_weight, ml_weight = (0.60, 0.20, 0.20) if ml_active else (0.75, 0.25, 0.0)

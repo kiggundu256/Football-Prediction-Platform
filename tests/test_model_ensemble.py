@@ -30,6 +30,23 @@ class ModelEnsembleTests(unittest.TestCase):
         self.assertEqual(result["model_quality"]["confidence_band"], "Moderate")
         self.assertEqual(len(result["model_quality"]["context_sources_missing"]), 0)
 
+    def test_goal_anchored_draw_candidate_uses_goal_model_draw_probability(self):
+        baseline = predict_ensemble(self.home, self.away)
+        candidate = predict_ensemble(
+            self.home, self.away, form_draw_strategy="goal_anchored"
+        )
+        self.assertAlmostEqual(
+            candidate["form_model"]["draw"],
+            candidate["goal_model"]["draw"],
+        )
+        self.assertAlmostEqual(baseline["form_model"]["draw"], 0.25)
+
+    def test_unknown_draw_strategy_is_rejected(self):
+        with self.assertRaises(ValueError):
+            predict_ensemble(
+                self.home, self.away, form_draw_strategy="unknown"
+            )
+
     def test_requires_both_team_profiles(self):
         with self.assertRaises(ValueError):
             predict_ensemble(self.home, None)

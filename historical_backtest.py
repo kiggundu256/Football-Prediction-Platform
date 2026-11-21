@@ -11,6 +11,7 @@ from math import log, sqrt
 
 from model_ensemble import predict_ensemble
 from corners_engine import predict_corner_markets
+from recency_weighting import build_recency_weighted_profile
 
 
 def _team_key(name):
@@ -209,13 +210,55 @@ def _calibration_bins(samples, bin_count=10):
     return output
 
 
+def _binary_threshold_sweep(samples, thresholds=(0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50)):
+    """Evaluate draw classification thresholds without changing probability scores."""
+    output = []
+    for threshold in thresholds:
+        tp = fp = fn = tn = 0
+        for probability, actual in samples:
+            predicted = float(probability) >= float(threshold)
+            if predicted and actual:
+                tp += 1
+            elif predicted:
+                fp += 1
+            elif actual:
+                fn += 1
+            else:
+                tn += 1
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2.0 * precision * recall / (precision + recall) if precision + recall else 0.0
+        total = tp + fp + fn + tn
+        output.append({
+            "threshold": float(threshold), "graded": total,
+            "predicted_draws": tp + fp, "true_positives": tp,
+            "false_positives": fp, "false_negatives": fn,
+            "precision": precision, "recall": recall, "f1": f1,
+            "classification_accuracy": (tp + tn) / total if total else None,
+        })
+    return output
+
+
 def _multiclass_calibration(samples, bin_count=10):
     """Calibration of the most likely 1X2 outcome, not three independent events."""
     return _calibration_bins(samples, bin_count)
 
 
-def run_historical_backtest(database_path, from_year=2020, minimum_history=5, max_matches=None):
+def _build_backtest_profile(history, strategy="baseline"):
+    """Select a profile builder for controlled walk-forward experiments."""
+    if strategy == "baseline":
+        return _profile(history)
+    if strategy == "recency_weighted":
+        return build_recency_weighted_profile(history, window=10, half_life_matches=5.0)
+    raise ValueError("Unknown profile strategy: %s" % strategy)
+
+
+def run_historical_backtest(database_path, from_year=2020, minimum_history=5, max_matches=None, profile_strategy="baseline", form_draw_strategy="baseline"):
     """Run a chronological backtest against completed local historical matches."""
+    if profile_strategy not in ("baseline", "recency_weighted"):
+        raise ValueError("profile_strategy must be 'baseline' or 'recency_weighted'.")
+    if form_draw_strategy not in ("baseline", "goal_anchored"):
+        raise ValueError("form_draw_strategy must be 'baseline' or 'goal_anchored'.")
     if int(minimum_history) < 1:
         raise ValueError("minimum_history must be at least one.")
     db = sqlite3.connect(str(database_path))
@@ -256,6 +299,12 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         for name in ("home_win", "draw", "away_win")
     }
     pending_outcome_calibration = defaultdict(list)
+    draw_samples = []
+    raw_draw_samples = []
+    draw_competition = defaultdict(lambda: {"n": 0, "draws": 0, "brier": 0.0, "log_loss": 0.0, "correct": 0})
+    draw_periods = defaultdict(lambda: {"n": 0, "draws": 0, "brier": 0.0, "log_loss": 0.0, "correct": 0})
+    draw_tp = draw_fp = draw_fn = 0
+    draw_brier_sum = draw_log_loss_sum = draw_raw_brier_sum = draw_raw_log_loss_sum = 0.0
     market_event_history = defaultdict(lambda: [0, 0])
     score_baseline_history = defaultdict(lambda: {"matches": 0, "scores": defaultdict(int)})
     score_top1_correct = score_top5_correct = score_graded = 0
@@ -277,7 +326,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 skipped_insufficient_history += 1
                 continue
             home_history, away_history = histories[home_key], histories[away_key]
-            home_profile, away_profile = _profile(home_history), _profile(away_history)
+            home_profile = _build_backtest_profile(home_history, profile_strategy)
+            away_profile = _build_backtest_profile(away_history, profile_strategy)
             if (home_profile is None or away_profile is None
                     or home_profile["played"] < int(minimum_history)
                     or away_profile["played"] < int(minimum_history)):
@@ -285,7 +335,10 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 continue
 
             try:
-                forecast = predict_ensemble(home_profile, away_profile)
+                forecast = predict_ensemble(
+                    home_profile, away_profile,
+                    form_draw_strategy=form_draw_strategy,
+                )
             except (KeyError, TypeError, ValueError, OverflowError):
                 skipped_insufficient_history += 1
                 continue
@@ -324,6 +377,39 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 if calibrated_total > 0 else list(raw_probabilities)
             )
             calibrated_ensemble = dict(zip(outcome_keys, probabilities))
+            draw_probability = max(0.0, min(1.0, float(calibrated_ensemble["draw"])))
+            raw_draw_probability = max(0.0, min(1.0, float(markets["draw"])))
+            actual_draw = actual_outcome == 1
+            predicted_draw = draw_probability >= max(
+                float(calibrated_ensemble["home_win"]), float(calibrated_ensemble["away_win"])
+            )
+            draw_brier = (draw_probability - float(actual_draw)) ** 2
+            draw_log_loss = -log(max(draw_probability if actual_draw else 1.0 - draw_probability, 1e-15))
+            raw_draw_brier = (raw_draw_probability - float(actual_draw)) ** 2
+            raw_draw_log_loss = -log(max(raw_draw_probability if actual_draw else 1.0 - raw_draw_probability, 1e-15))
+            draw_brier_sum += draw_brier
+            draw_log_loss_sum += draw_log_loss
+            draw_raw_brier_sum += raw_draw_brier
+            draw_raw_log_loss_sum += raw_draw_log_loss
+            draw_tp += int(predicted_draw and actual_draw)
+            draw_fp += int(predicted_draw and not actual_draw)
+            draw_fn += int(not predicted_draw and actual_draw)
+            draw_samples.append((draw_probability, actual_draw))
+            raw_draw_samples.append((raw_draw_probability, actual_draw))
+            comp_key = str(row["country"] or "Unknown") + " | " + str(row["competition"] or "Unknown") + " | " + str(row["season"] or "Unknown")
+            draw_group = draw_competition[comp_key]
+            draw_group["n"] += 1
+            draw_group["draws"] += int(actual_draw)
+            draw_group["brier"] += draw_brier
+            draw_group["log_loss"] += draw_log_loss
+            draw_group["correct"] += int(predicted_draw == actual_draw)
+            period_key = str(row["match_date"] or "")[:4] or "Unknown"
+            period_group = draw_periods[period_key]
+            period_group["n"] += 1
+            period_group["draws"] += int(actual_draw)
+            period_group["brier"] += draw_brier
+            period_group["log_loss"] += draw_log_loss
+            period_group["correct"] += int(predicted_draw == actual_draw)
             predicted_outcome = max(range(3), key=lambda index: probabilities[index])
             for key, raw_probability in zip(outcome_keys, raw_probabilities):
                 pending_outcome_calibration[key].append(
@@ -678,6 +764,8 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
 
     return {
         "from_year": int(from_year), "minimum_history": int(minimum_history),
+        "profile_strategy": profile_strategy,
+        "form_draw_strategy": form_draw_strategy,
         "source_completed_matches": len(rows),
         "source_latest_match_date": source_latest_match_date,
         "live_calibration_profile": live_calibration_profile,
@@ -685,6 +773,30 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
         "evaluated_matches": evaluated,
         "skipped_insufficient_history": skipped_insufficient_history,
         "accuracy_1x2": market_stats["1X2"]["correct"] / market_stats["1X2"]["graded"],
+        "draw_audit": {
+            "graded": len(draw_samples),
+            "actual_draws": sum(int(actual) for _, actual in draw_samples),
+            "observed_draw_rate": sum(int(actual) for _, actual in draw_samples) / len(draw_samples) if draw_samples else None,
+            "mean_predicted_draw_probability": sum(p for p, _ in draw_samples) / len(draw_samples) if draw_samples else None,
+            "prediction_accuracy": (draw_tp + (len(draw_samples) - draw_tp - draw_fp - draw_fn)) / len(draw_samples) if draw_samples else None,
+            "precision": draw_tp / (draw_tp + draw_fp) if draw_tp + draw_fp else None,
+            "recall": draw_tp / (draw_tp + draw_fn) if draw_tp + draw_fn else None,
+            "f1_score": (2.0 * draw_tp / (2.0 * draw_tp + draw_fp + draw_fn)
+                         if (2 * draw_tp + draw_fp + draw_fn) else 0.0),
+            "true_positives": draw_tp, "false_positives": draw_fp, "false_negatives": draw_fn,
+            "brier_score": draw_brier_sum / len(draw_samples) if draw_samples else None,
+            "log_loss": draw_log_loss_sum / len(draw_samples) if draw_samples else None,
+            "raw_brier_score": draw_raw_brier_sum / len(raw_draw_samples) if raw_draw_samples else None,
+            "raw_log_loss": draw_raw_log_loss_sum / len(raw_draw_samples) if raw_draw_samples else None,
+            "calibration": _calibration_bins(draw_samples),
+            "raw_calibration": _calibration_bins(raw_draw_samples),
+            "threshold_sweep": _binary_threshold_sweep(draw_samples),
+            "raw_threshold_sweep": _binary_threshold_sweep(raw_draw_samples),
+            "by_competition_season": [{"competition_season": name, "matches": item["n"], "actual_draw_rate": item["draws"] / item["n"], "prediction_accuracy": item["correct"] / item["n"], "brier_score": item["brier"] / item["n"], "log_loss": item["log_loss"] / item["n"]} for name, item in sorted(draw_competition.items())],
+            "by_year": [{"year": name, "matches": item["n"], "actual_draw_rate": item["draws"] / item["n"], "prediction_accuracy": item["correct"] / item["n"], "brier_score": item["brier"] / item["n"], "log_loss": item["log_loss"] / item["n"]} for name, item in sorted(draw_periods.items())],
+            "classification_threshold": "Draw predicted when calibrated draw probability is at least as high as both calibrated home-win and away-win probabilities.",
+            "leakage_control": "Calibrated probabilities use only prior calendar days; same-day results are withheld until all forecasts for that day are complete.",
+        },
         "brier_score_1x2": brier_sum / evaluated,
         "log_loss_1x2": log_loss_sum / evaluated,
         "baseline_brier_score_1x2": baseline_brier_sum / evaluated,
@@ -747,5 +859,196 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "prequential calibrators and smoothed market-specific event-rate baselines. Correct-score top-1 is benchmarked against "
             "prior competition score frequencies with add-one smoothing over an 11x11 score grid. No trained ML, odds, injuries, "
             "lineups, referee or weather inputs are used in this historical test. Raw and calibrated Brier scores are reported separately."
+        ),
+    }
+
+
+
+def run_profile_weighting_experiment(database_path, from_year=2020,
+                                     minimum_history=5, max_matches=None):
+    """Compare baseline and recency-weighted profiles on identical date-safe data.
+
+    Both strategies run through the same walk-forward evaluator, calibrators,
+    fixtures and scoring rules. A positive Brier/log-loss delta means the
+    recency-weighted candidate is better because lower scores are preferred.
+    """
+    baseline = run_historical_backtest(
+        database_path, from_year, minimum_history, max_matches,
+        profile_strategy="baseline",
+    )
+    candidate = run_historical_backtest(
+        database_path, from_year, minimum_history, max_matches,
+        profile_strategy="recency_weighted",
+    )
+
+    def metric_delta(key):
+        base_value = baseline.get(key)
+        candidate_value = candidate.get(key)
+        if base_value is None or candidate_value is None:
+            return None
+        return float(base_value) - float(candidate_value)
+
+    baseline_n = int(baseline.get("evaluated_matches") or 0)
+    candidate_n = int(candidate.get("evaluated_matches") or 0)
+    same_coverage = baseline_n == candidate_n
+    brier_gain = metric_delta("brier_score_1x2")
+    log_loss_gain = metric_delta("log_loss_1x2")
+    accuracy_gain = None
+    if baseline.get("accuracy_1x2") is not None and candidate.get("accuracy_1x2") is not None:
+        accuracy_gain = float(candidate["accuracy_1x2"]) - float(baseline["accuracy_1x2"])
+
+    # Do not promote on accuracy alone. Require both proper scoring rules to
+    # improve on identical evaluation coverage; this is an experiment gate,
+    # not a claim of statistical significance.
+    improves_both_scores = bool(
+        same_coverage and brier_gain is not None and log_loss_gain is not None
+        and brier_gain > 0 and log_loss_gain > 0
+    )
+    return {
+        "experiment": "baseline_vs_recency_weighted_team_profiles",
+        "from_year": int(from_year),
+        "minimum_history": int(minimum_history),
+        "same_evaluation_coverage": same_coverage,
+        "baseline": {
+            "evaluated_matches": baseline_n,
+            "accuracy_1x2": baseline.get("accuracy_1x2"),
+            "brier_score_1x2": baseline.get("brier_score_1x2"),
+            "log_loss_1x2": baseline.get("log_loss_1x2"),
+            "by_market": baseline.get("by_market", {}),
+        },
+        "recency_weighted": {
+            "evaluated_matches": candidate_n,
+            "accuracy_1x2": candidate.get("accuracy_1x2"),
+            "brier_score_1x2": candidate.get("brier_score_1x2"),
+            "log_loss_1x2": candidate.get("log_loss_1x2"),
+            "by_market": candidate.get("by_market", {}),
+        },
+        "delta_candidate_minus_baseline": {
+            "accuracy_1x2": accuracy_gain,
+            "brier_improvement": brier_gain,
+            "log_loss_improvement": log_loss_gain,
+        },
+        "recommendation": (
+            "Candidate improves both Brier score and log loss on identical coverage; "
+            "review competition and market breakdowns before promotion."
+            if improves_both_scores else
+            "Do not promote. The candidate has not demonstrated improvement on both "
+            "Brier score and log loss with identical evaluation coverage."
+        ),
+        "promotion_gate_passed": improves_both_scores,
+        "methodology": (
+            "Two independent chronological walk-forward runs over the same local "
+            "completed-match dataset. Same-day outcomes are withheld until every "
+            "forecast for that date is generated. Each strategy calibrates only "
+            "from its own prior out-of-sample predictions. Production predictions "
+            "remain unchanged."
+        ),
+    }
+
+
+
+def run_draw_probability_experiment(database_path, from_year=2020,
+                                    minimum_history=5, max_matches=None):
+    """Compare the fixed 25% form-draw prior with goal-model-anchored draws.
+
+    This is an isolated formula-audit experiment. It keeps team profiles,
+    fixture coverage, calibration, market scoring and leakage controls identical.
+    """
+    baseline = run_historical_backtest(
+        database_path, from_year, minimum_history, max_matches,
+        profile_strategy="baseline", form_draw_strategy="baseline",
+    )
+    candidate = run_historical_backtest(
+        database_path, from_year, minimum_history, max_matches,
+        profile_strategy="baseline", form_draw_strategy="goal_anchored",
+    )
+
+    baseline_n = int(baseline.get("evaluated_matches") or 0)
+    candidate_n = int(candidate.get("evaluated_matches") or 0)
+    same_coverage = baseline_n == candidate_n
+
+    def gain(key):
+        left, right = baseline.get(key), candidate.get(key)
+        return float(left) - float(right) if left is not None and right is not None else None
+
+    brier_gain = gain("brier_score_1x2")
+    log_loss_gain = gain("log_loss_1x2")
+    baseline_draw = baseline.get("draw_audit") or {}
+    candidate_draw = candidate.get("draw_audit") or {}
+
+    def draw_gain(key):
+        left, right = baseline_draw.get(key), candidate_draw.get(key)
+        return float(left) - float(right) if left is not None and right is not None else None
+
+    draw_brier_gain = draw_gain("brier_score")
+    draw_log_loss_gain = draw_gain("log_loss")
+    raw_draw_brier_gain = draw_gain("raw_brier_score")
+    raw_draw_log_loss_gain = draw_gain("raw_log_loss")
+    accuracy_change = (
+        float(candidate["accuracy_1x2"]) - float(baseline["accuracy_1x2"])
+        if baseline.get("accuracy_1x2") is not None and candidate.get("accuracy_1x2") is not None
+        else None
+    )
+    # A draw-formula candidate must improve both the full 1X2 forecast and
+    # the draw event itself. Overall scores alone can hide worse draw forecasts.
+    passed = bool(
+        same_coverage
+        and brier_gain is not None and log_loss_gain is not None
+        and draw_brier_gain is not None and draw_log_loss_gain is not None
+        and raw_draw_brier_gain is not None and raw_draw_log_loss_gain is not None
+        and brier_gain > 0 and log_loss_gain > 0
+        and draw_brier_gain > 0 and draw_log_loss_gain > 0
+        and raw_draw_brier_gain > 0 and raw_draw_log_loss_gain > 0
+    )
+    return {
+        "experiment": "fixed_draw_prior_vs_goal_anchored_draw",
+        "from_year": int(from_year),
+        "minimum_history": int(minimum_history),
+        "same_evaluation_coverage": same_coverage,
+        "baseline": {
+            "evaluated_matches": baseline_n,
+            "accuracy_1x2": baseline.get("accuracy_1x2"),
+            "brier_score_1x2": baseline.get("brier_score_1x2"),
+            "log_loss_1x2": baseline.get("log_loss_1x2"),
+            "by_market": baseline.get("by_market", {}),
+            "draw_audit": baseline.get("draw_audit", {}),
+            "calibration_by_market": baseline.get("calibration_by_market", {}),
+            "by_competition_season": baseline.get("by_competition_season", []),
+        },
+        "goal_anchored": {
+            "evaluated_matches": candidate_n,
+            "accuracy_1x2": candidate.get("accuracy_1x2"),
+            "brier_score_1x2": candidate.get("brier_score_1x2"),
+            "log_loss_1x2": candidate.get("log_loss_1x2"),
+            "by_market": candidate.get("by_market", {}),
+            "draw_audit": candidate.get("draw_audit", {}),
+            "calibration_by_market": candidate.get("calibration_by_market", {}),
+            "by_competition_season": candidate.get("by_competition_season", []),
+        },
+        "delta_candidate_minus_baseline": {
+            "accuracy_1x2": accuracy_change,
+            "brier_improvement": brier_gain,
+            "log_loss_improvement": log_loss_gain,
+            "draw_brier_improvement": draw_brier_gain,
+            "draw_log_loss_improvement": draw_log_loss_gain,
+            "raw_draw_brier_improvement": raw_draw_brier_gain,
+            "raw_draw_log_loss_improvement": raw_draw_log_loss_gain,
+        },
+        "promotion_gate_passed": passed,
+        "recommendation": (
+            "Candidate improves overall 1X2 plus calibrated and raw draw Brier score and log loss "
+            "on identical coverage; review threshold, calibration and competition diagnostics before promotion."
+            if passed else
+            "Do not promote. The candidate must improve overall 1X2 and both calibrated and raw "
+            "draw-specific Brier score and log loss on identical evaluation coverage."
+        ),
+        "methodology": (
+            "The only changed variable is the draw probability used by the recent-form "
+            "component: fixed 25% baseline versus the independent-Poisson goal model's "
+            "draw probability. Team profiles, home advantage, ensemble weights, fixture "
+            "selection, date-safe calibration and scoring remain identical. Promotion requires "
+            "improvement in both calibrated and raw draw Brier/log loss as well as overall 1X2 "
+            "Brier/log loss. Threshold sweeps are diagnostic only and do not tune or alter the "
+            "production decision rule. Production predictions remain unchanged."
         ),
     }
