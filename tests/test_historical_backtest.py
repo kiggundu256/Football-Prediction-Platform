@@ -62,7 +62,7 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertIn("1X2", result["by_market"])
         self.assertEqual(
             {item["model"] for item in result["by_model"]},
-            {"Goal distribution", "Recent form", "Ensemble"},
+            {"Goal distribution", "Recent form", "Elo strength", "Ensemble"},
         )
         for item in result["by_model"]:
             self.assertEqual(item["matches"], 2)
