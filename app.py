@@ -1042,11 +1042,15 @@ class MainWindow(QMainWindow):
             return
         stats = self.historical_db.stats()
         corner_coverage = self.historical_db.corner_coverage_summary()
+        advanced_coverage = self.historical_db.advanced_metrics_coverage()["by_metric"]
         self.library_summary.setText(
             f"Stored matches: {stats['matches']:,}  •  Completed: {stats['completed']:,}  •  "
             f"Competitions: {stats['competitions']}  •  Competition-seasons: {stats['competition_seasons']}  •  "
             f"Matches with saved statistics: {stats['with_statistics']:,}  •  "
-            f"Completed matches with both corner totals: {corner_coverage['completed_with_corners']:,}"
+            f"Completed matches with both corner totals: {corner_coverage['completed_with_corners']:,}  •  "
+            f"Advanced metrics — xG: {advanced_coverage['xg']:,}, shots: {advanced_coverage['shots']:,}, "
+            f"shots on target: {advanced_coverage['shots_on_target']:,}, possession: {advanced_coverage['possession']:,}, "
+            f"fouls: {advanced_coverage['fouls']:,}, cards: {advanced_coverage['yellow_cards'] + advanced_coverage['red_cards']:,}"
         )
         coverage = self.historical_db.coverage_summary()
         self.imported_coverage_total_label.setText(
