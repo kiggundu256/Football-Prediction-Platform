@@ -42,6 +42,8 @@ def extract_match_team_metrics(stats_json, home_team_id=None, away_team_id=None)
         stats = {}
     home_values, away_values = {}, {}
     corners_by_team = stats.get("corners_by_team") or {}
+    if not isinstance(corners_by_team, dict):
+        corners_by_team = {}
     for metric, (home_key, away_key) in METRIC_KEYS.items():
         home = _number(stats.get(home_key))
         away = _number(stats.get(away_key))
@@ -62,8 +64,8 @@ def build_team_advanced_profile(history, window=10):
     output = {}
     for metric in METRIC_KEYS:
         observed = [
-            (item.get("advanced_for", {}).get(metric),
-             item.get("advanced_against", {}).get(metric))
+            ((item.get("advanced_for") or {}).get(metric),
+             (item.get("advanced_against") or {}).get(metric))
             for item in history
             if item.get("advanced_for", {}).get(metric) is not None
             and item.get("advanced_against", {}).get(metric) is not None
