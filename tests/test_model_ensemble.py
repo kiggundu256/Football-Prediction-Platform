@@ -13,9 +13,18 @@ class ModelEnsembleTests(unittest.TestCase):
         result = predict_ensemble(self.home, self.away)
         markets = result["markets"]
         self.assertAlmostEqual(sum(markets[key] for key in ("home_win", "draw", "away_win")), 1.0)
+        self.assertIsNone(result["elo_model"])
         for key in ("over", "btts_yes", "btts_no"):
             values = markets[key].values() if isinstance(markets[key], dict) else [markets[key]]
             self.assertTrue(all(0 <= value <= 1 for value in values))
+
+    def test_elo_changes_prediction_and_is_reported(self):
+        baseline = predict_ensemble(self.home, self.away)
+        rated = predict_ensemble(self.home, self.away, elo_home_rating=1700, elo_away_rating=1400)
+        self.assertIsNotNone(rated["elo_model"])
+        self.assertGreater(rated["markets"]["home_win"], baseline["markets"]["home_win"])
+        self.assertTrue(rated["model_quality"]["elo_model_active"])
+        self.assertAlmostEqual(sum(rated["markets"][key] for key in ("home_win", "draw", "away_win")), 1.0)
 
     def test_reports_small_sample_and_does_not_claim_trained_ml(self):
         result = predict_ensemble(self.home, self.away)
@@ -24,8 +33,7 @@ class ModelEnsembleTests(unittest.TestCase):
 
     def test_context_coverage_reduces_confidence_when_sources_are_missing(self):
         result = predict_ensemble(self.home, self.away, context={
-            "injuries": True, "lineups": True, "referee": True,
-            "weather": True, "corners": True,
+            "injuries": True, "lineups": True, "referee": True, "weather": True, "corners": True,
         })
         self.assertEqual(result["model_quality"]["confidence_band"], "Moderate")
         self.assertEqual(len(result["model_quality"]["context_sources_missing"]), 0)
