@@ -48,5 +48,155 @@ class MachineLearningTests(unittest.TestCase):
         self.assertAlmostEqual(features["home_points_per_game"], 2.0)
 
 
+
+    def test_historical_training_rows_use_only_prior_dates_and_require_history(self):
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        from machine_learning import build_historical_training_rows
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "history.db"
+            db = sqlite3.connect(path)
+            db.execute("""CREATE TABLE historical_matches (
+                fixture_id INTEGER PRIMARY KEY, match_date TEXT, home_team TEXT,
+                away_team TEXT, home_goals INTEGER, away_goals INTEGER, status TEXT
+            )""")
+            fixture_id = 1
+            for index in range(5):
+                date = f"2020-01-{index + 1:02d}"
+                db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                           (fixture_id, date, "Home FC", f"Opponent H{index}", 2, 0))
+                fixture_id += 1
+                db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                           (fixture_id, date, "Away FC", f"Opponent A{index}", 0, 1))
+                fixture_id += 1
+            db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                       (fixture_id, "2020-01-06", "Home FC", "Away FC", 1, 1))
+            db.commit()
+            db.close()
+
+            rows = build_historical_training_rows(path, from_year=2020, minimum_history=5)
+            self.assertEqual(len(rows), 1)
+            features = json.loads(rows[0][0])
+            self.assertGreater(features["home_xg"], 0)
+            self.assertGreater(features["away_xg"], 0)
+            self.assertEqual((rows[0][1], rows[0][2]), (1, 1))
+
+    def test_historical_training_rows_withhold_same_day_results(self):
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        from machine_learning import build_historical_training_rows
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "history.db"
+            db = sqlite3.connect(path)
+            db.execute("""CREATE TABLE historical_matches (
+                fixture_id INTEGER PRIMARY KEY, match_date TEXT, home_team TEXT,
+                away_team TEXT, home_goals INTEGER, away_goals INTEGER, status TEXT
+            )""")
+            fixture_id = 1
+            for index in range(5):
+                date = f"2020-02-{index + 1:02d}"
+                db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                           (fixture_id, date, "Home FC", f"Opponent H{index}", 2, 0))
+                fixture_id += 1
+                db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                           (fixture_id, date, "Away FC", f"Opponent A{index}", 0, 1))
+                fixture_id += 1
+            # Both same-day fixtures must be evaluated before either result is added.
+            db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                       (fixture_id, "2020-02-06", "Home FC", "Away FC", 1, 0))
+            fixture_id += 1
+            db.execute("INSERT INTO historical_matches VALUES (?, ?, ?, ?, ?, ?, 'FT')",
+                       (fixture_id, "2020-02-06", "Away FC", "Home FC", 0, 1))
+            db.commit()
+            db.close()
+
+            rows = build_historical_training_rows(path, from_year=2020, minimum_history=5)
+            self.assertEqual(len(rows), 2)
+
+
+
+    def test_feature_builder_includes_elo_and_preserves_missing_advanced_metrics(self):
+        home = {"played": 5, "wins": 3, "draws": 1, "scored_avg": 1.8, "conceded_avg": 0.8}
+        away = {"played": 5, "wins": 1, "draws": 2, "scored_avg": 1.0, "conceded_avg": 1.4}
+        features = build_model_features(home, away, 1.6, 0.9, 1600, 1500)
+        self.assertGreater(features["elo_difference"], 0)
+        self.assertGreater(features["elo_expected_home_score"], 0.5)
+        self.assertIsNone(features["home_corners_for_avg"])
+        self.assertEqual(features["home_corners_samples"], 0)
+
+    def test_model_can_train_with_selected_feature_subset(self):
+        rows = []
+        for _ in range(30):
+            rows.append((json.dumps({"home_xg": 2.0, "away_xg": 0.6}), 2, 0))
+            rows.append((json.dumps({"home_xg": 1.0, "away_xg": 1.0}), 1, 1))
+            rows.append((json.dumps({"home_xg": 0.6, "away_xg": 2.0}), 0, 2))
+        model = train_outcome_model(rows, minimum_samples=80, epochs=20,
+                                    feature_names=("home_xg", "away_xg"))
+        self.assertEqual(model["feature_names"], ["home_xg", "away_xg"])
+        prediction = predict_outcome(model, {"home_xg": 2.0, "away_xg": 0.6})
+        self.assertAlmostEqual(sum(prediction.values()), 1.0)
+
+    def test_selected_feature_subset_rejects_unknown_features(self):
+        with self.assertRaises(ValueError):
+            train_outcome_model([], feature_names=("unknown_metric",))
+
+    def test_sparse_advanced_features_train_and_predict_with_missing_indicators(self):
+        rows = []
+        for index in range(70):
+            rows.append((json.dumps({"home_xg": 1.9, "away_xg": 0.7,
+                "home_points_per_game": 2.2, "away_points_per_game": 0.8,
+                "home_goal_difference": 0.9, "away_goal_difference": -0.7}), 2, 0))
+            rows.append((json.dumps({"home_xg": 1.0, "away_xg": 1.0,
+                "home_points_per_game": 1.2, "away_points_per_game": 1.2,
+                "home_goal_difference": 0.0, "away_goal_difference": 0.0}), 1, 1))
+            rows.append((json.dumps({"home_xg": 0.7, "away_xg": 1.9,
+                "home_points_per_game": 0.8, "away_points_per_game": 2.2,
+                "home_goal_difference": -0.7, "away_goal_difference": 0.9}), 0, 2))
+        model = train_outcome_model(rows, minimum_samples=200, epochs=40)
+        self.assertTrue(model["missing_indicators"])
+        prediction = predict_outcome(model, json.loads(rows[0][0]))
+        self.assertAlmostEqual(sum(prediction.values()), 1.0)
+
+
+    def test_independent_binary_market_models_train_and_return_valid_probabilities(self):
+        from machine_learning import train_binary_market_model, predict_binary_market
+        rows = []
+        for _ in range(60):
+            rows.append(({"home_xg": 1.8, "away_xg": 1.2}, 2, 1))
+            rows.append(({"home_xg": 0.5, "away_xg": 0.4}, 0, 0))
+            rows.append(({"home_xg": 2.0, "away_xg": 0.3}, 3, 0))
+            rows.append(({"home_xg": 0.8, "away_xg": 1.1}, 1, 1))
+            # Include genuine 4+ goal outcomes so Over 3.5 has both classes.
+            rows.append(({"home_xg": 2.2, "away_xg": 1.8}, 3, 1))
+        for target in ("over_1_5", "over_2_5", "over_3_5", "btts_yes"):
+            model = train_binary_market_model(rows, target, minimum_samples=100, epochs=30)
+            self.assertIsNotNone(model)
+            probability = predict_binary_market(model, {"home_xg": 1.8, "away_xg": 1.2})
+            self.assertGreaterEqual(probability, 0.0)
+            self.assertLessEqual(probability, 1.0)
+            self.assertEqual(model["target"], target)
+
+    def test_binary_market_model_rejects_unknown_target_and_sparse_classes(self):
+        from machine_learning import train_binary_market_model
+        with self.assertRaises(ValueError):
+            train_binary_market_model([], "match_winner")
+        rows = [({"home_xg": 1.0}, 0, 0)] * 250
+        self.assertIsNone(train_binary_market_model(rows, "btts_yes", minimum_samples=100))
+
+    def test_binary_market_model_preserves_missing_feature_indicators(self):
+        from machine_learning import train_binary_market_model, predict_binary_market
+        rows = []
+        for index in range(30):
+            rows.append(({"home_xg": 1.5, "away_xg": None}, 2, 1))
+            rows.append(({"home_xg": 0.4, "away_xg": None}, 0, 0))
+        model = train_binary_market_model(rows, "over_1_5", minimum_samples=50, epochs=20)
+        self.assertTrue(model["missing_indicators"])
+        self.assertTrue(0.0 <= predict_binary_market(model, {"home_xg": 1.2}) <= 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
