@@ -262,3 +262,90 @@ def build_historical_training_rows(database_path, from_year=2020,
             elo.update(competition, home_team, away_team, int(hg), int(ag))
 
     return training[-max(1, int(max_samples)):]
+
+
+BINARY_MARKET_TARGETS = {
+    "over_1_5": lambda home, away: int(home + away > 1.5),
+    "over_2_5": lambda home, away: int(home + away > 2.5),
+    "over_3_5": lambda home, away: int(home + away > 3.5),
+    "btts_yes": lambda home, away: int(home > 0 and away > 0),
+}
+
+
+def train_binary_market_model(rows, target, minimum_samples=200, epochs=100,
+                              learning_rate=0.04, l2=0.01,
+                              feature_names=None):
+    """Train one independent binary market model from settled scorelines.
+
+    Rows contain (feature mapping/JSON, home goals, away goals). Targets are
+    deliberately independent: each market gets its own labels and weights.
+    """
+    if target not in BINARY_MARKET_TARGETS:
+        raise ValueError("Unsupported binary market target")
+    names = tuple(feature_names or FEATURE_NAMES)
+    if not names or any(name not in FEATURE_NAMES for name in names):
+        raise ValueError("feature_names must be a non-empty subset of the supported schema")
+    import json
+    parsed, labels = [], []
+    for raw_features, home_goals, away_goals in rows:
+        try:
+            features = json.loads(raw_features) if isinstance(raw_features, str) else raw_features
+            home, away = int(home_goals), int(away_goals)
+            if home < 0 or away < 0:
+                continue
+            parsed.append(_vector(features, names))
+            labels.append(BINARY_MARKET_TARGETS[target](home, away))
+        except (TypeError, ValueError, KeyError, OverflowError):
+            continue
+    positives = sum(labels)
+    if len(parsed) < int(minimum_samples) or positives < 10 or len(labels) - positives < 10:
+        return None
+    width = len(names)
+    means, scales = [], []
+    for col in range(width):
+        observed = [row[col] for row in parsed if row[col] is not None]
+        mean = sum(observed) / len(observed) if observed else 0.0
+        variance = sum((value - mean) ** 2 for value in observed) / len(observed) if observed else 0.0
+        means.append(mean)
+        scales.append(max(variance ** 0.5, 1e-6))
+    matrix = []
+    for row in parsed:
+        values = [0.0 if value is None else (value - means[i]) / scales[i]
+                  for i, value in enumerate(row)]
+        values.extend(1.0 if value is None else 0.0 for value in row)
+        matrix.append([1.0] + values)
+    weights = [0.0] * (2 * width + 1)
+    for _ in range(max(1, int(epochs))):
+        gradients = [0.0] * len(weights)
+        for vector, label in zip(matrix, labels):
+            score = max(-30.0, min(30.0, sum(w * x for w, x in zip(weights, vector))))
+            probability = 1.0 / (1.0 + exp(-score))
+            error = probability - label
+            for i, value in enumerate(vector):
+                gradients[i] += error * value
+        count = len(matrix)
+        for i in range(len(weights)):
+            gradient = gradients[i] / count + (l2 * weights[i] if i else 0.0)
+            weights[i] -= learning_rate * gradient
+    return {
+        "target": target, "feature_names": list(names), "means": means,
+        "scales": scales, "weights": weights, "samples": len(parsed),
+        "positive_samples": positives, "negative_samples": len(parsed) - positives,
+        "missing_indicators": True,
+    }
+
+
+def predict_binary_market(model, features):
+    """Return a finite event probability in [0, 1], or None without a model."""
+    if not model:
+        return None
+    names = tuple(model.get("feature_names") or BASE_FEATURE_NAMES)
+    vector = _vector(features, names)
+    values = [0.0 if value is None else (value - model["means"][i]) / model["scales"][i]
+              for i, value in enumerate(vector)]
+    if model.get("missing_indicators"):
+        values.extend(1.0 if value is None else 0.0 for value in vector)
+    score = sum(weight * value for weight, value in zip(model["weights"], [1.0] + values))
+    score = max(-30.0, min(30.0, score))
+    probability = 1.0 / (1.0 + exp(-score))
+    return max(0.0, min(1.0, probability))
