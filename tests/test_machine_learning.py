@@ -117,8 +117,6 @@ class MachineLearningTests(unittest.TestCase):
             rows = build_historical_training_rows(path, from_year=2020, minimum_history=5)
             self.assertEqual(len(rows), 2)
 
-if __name__ == "__main__":
-    unittest.main()
 
 
     def test_feature_builder_includes_elo_and_preserves_missing_advanced_metrics(self):
@@ -146,3 +144,7 @@ if __name__ == "__main__":
         self.assertTrue(model["missing_indicators"])
         prediction = predict_outcome(model, json.loads(rows[0][0]))
         self.assertAlmostEqual(sum(prediction.values()), 1.0)
+
+
+if __name__ == "__main__":
+    unittest.main()
