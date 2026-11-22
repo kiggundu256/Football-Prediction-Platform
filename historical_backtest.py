@@ -11,7 +11,7 @@ from math import log, sqrt
 
 from model_ensemble import predict_ensemble
 from corners_engine import predict_corner_markets
-from machine_learning import (BASE_FEATURE_NAMES, FEATURE_NAMES, build_model_features, predict_outcome, train_outcome_model)
+from machine_learning import (BASE_FEATURE_NAMES, FEATURE_NAMES, build_model_features, predict_outcome, train_outcome_model, train_binary_market_model, predict_binary_market, BINARY_MARKET_TARGETS)
 from elo_rating import EloRatingSystem
 from advanced_metrics import extract_match_team_metrics, build_match_advanced_features, METRIC_KEYS
 
@@ -274,6 +274,15 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     ml_model = None
     ml_retrain_count = 0
     ml_evaluated = 0
+    binary_market_models = {}
+    binary_market_stats = {
+        target: {"matches": 0, "ml_brier_sum": 0.0, "production_brier_sum": 0.0,
+                 "ml_log_loss_sum": 0.0, "production_log_loss_sum": 0.0,
+                 "ml_correct": 0, "paired_delta_sum": 0.0, "paired_delta_sq_sum": 0.0}
+        for target in BINARY_MARKET_TARGETS
+    }
+    binary_market_retrain_count = 0
+    binary_market_last_training_total = 0
     calibration_samples = defaultdict(list)
     raw_calibration_samples = defaultdict(list)
     # Running raw-probability-bin counts avoid rescanning every prior match.
@@ -318,6 +327,21 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 ml_model = ml_models[ml_component_names[3]]
                 ml_last_training_total = ml_total_training_examples
                 ml_retrain_count += 1
+            if (not binary_market_models or
+                    ml_total_training_examples - binary_market_last_training_total >= 2000):
+                trained_binary = {}
+                for target in BINARY_MARKET_TARGETS:
+                    model = train_binary_market_model(
+                        ml_training_rows, target, minimum_samples=200, epochs=40,
+                        feature_names=FEATURE_NAMES,
+                    )
+                    if model:
+                        trained_binary[target] = model
+                # Keep independently trainable targets; a sparse target must not block others.
+                binary_market_models.update(trained_binary)
+                if trained_binary:
+                    binary_market_last_training_total = ml_total_training_examples
+                    binary_market_retrain_count += 1
         pending_ml_training_rows = []
         pending_market_calibration = defaultdict(list)
         # All forecasts for this date must use Elo ratings from earlier dates only.
@@ -361,6 +385,32 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 advanced_features=advanced_features,
             )
             pending_ml_training_rows.append((json.dumps(ml_features, sort_keys=True), actual_home, actual_away))
+            binary_target_events = {
+                "over_1_5": (float(markets["over"]["1.5"]), actual_home + actual_away > 1.5),
+                "over_2_5": (float(markets["over"]["2.5"]), actual_home + actual_away > 2.5),
+                "over_3_5": (float(markets["over"]["3.5"]), actual_home + actual_away > 3.5),
+                "btts_yes": (float(markets["btts_yes"]), actual_home > 0 and actual_away > 0),
+            }
+            for target, (production_probability, actual_event) in binary_target_events.items():
+                binary_model = binary_market_models.get(target)
+                if not binary_model:
+                    continue
+                ml_probability = predict_binary_market(binary_model, ml_features)
+                if ml_probability is None:
+                    continue
+                observed = float(bool(actual_event))
+                production_probability = max(1e-12, min(1.0 - 1e-12, production_probability))
+                ml_probability = max(1e-12, min(1.0 - 1e-12, float(ml_probability)))
+                stats = binary_market_stats[target]
+                stats["matches"] += 1
+                stats["ml_brier_sum"] += (ml_probability - observed) ** 2
+                stats["production_brier_sum"] += (production_probability - observed) ** 2
+                stats["ml_log_loss_sum"] += -(observed * log(ml_probability) + (1.0 - observed) * log(1.0 - ml_probability))
+                stats["production_log_loss_sum"] += -(observed * log(production_probability) + (1.0 - observed) * log(1.0 - production_probability))
+                stats["ml_correct"] += int((ml_probability >= 0.5) == bool(actual_event))
+                delta = (ml_probability - observed) ** 2 - (production_probability - observed) ** 2
+                stats["paired_delta_sum"] += delta
+                stats["paired_delta_sq_sum"] += delta * delta
             if ml_models:
                 ml_keys = ("home_win", "draw", "away_win")
                 goal_probs = forecast["goal_model"]
@@ -912,6 +962,34 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 ] if item["matches"] > 1 else None
             ),
         } for name, item in sorted(ml_audit_stats.items()) if item["matches"]],
+        "binary_market_ml_walk_forward": {
+            "status": "Evaluated" if any(item["matches"] for item in binary_market_stats.values()) else "Insufficient prior training history",
+            "training_examples_available_at_end": ml_total_training_examples,
+            "training_examples_used": min(4000, ml_total_training_examples),
+            "retraining_events": binary_market_retrain_count,
+            "minimum_training_examples": 200,
+            "retraining_policy": "Initial fit after 200 prior-date examples; refit after each additional 2,000 examples; maximum 4,000 most recent examples; 40 epochs. Each target is trained independently and can be unavailable without blocking other targets.",
+            "leakage_control": "Models are frozen for each calendar date. That date's labels enter training only after all same-day forecasts are complete.",
+            "comparison": "Each binary ML target is compared with the existing production Poisson/form probability on the exact same fixtures. Negative Brier delta means ML improves on production.",
+            "markets": {
+                target: {
+                    "matches": item["matches"],
+                    "ml_brier_score": item["ml_brier_sum"] / item["matches"] if item["matches"] else None,
+                    "production_brier_score": item["production_brier_sum"] / item["matches"] if item["matches"] else None,
+                    "brier_delta_vs_production": item["paired_delta_sum"] / item["matches"] if item["matches"] else None,
+                    "brier_delta_95_ci": (
+                        [
+                            (item["paired_delta_sum"] / item["matches"]) - 1.96 * sqrt(max(0.0, (item["paired_delta_sq_sum"] - item["paired_delta_sum"] ** 2 / item["matches"]) / max(1, item["matches"] - 1)) / item["matches"]),
+                            (item["paired_delta_sum"] / item["matches"]) + 1.96 * sqrt(max(0.0, (item["paired_delta_sq_sum"] - item["paired_delta_sum"] ** 2 / item["matches"]) / max(1, item["matches"] - 1)) / item["matches"]),
+                        ] if item["matches"] > 1 else None
+                    ),
+                    "ml_log_loss": item["ml_log_loss_sum"] / item["matches"] if item["matches"] else None,
+                    "production_log_loss": item["production_log_loss_sum"] / item["matches"] if item["matches"] else None,
+                    "ml_accuracy": item["ml_correct"] / item["matches"] if item["matches"] else None,
+                    "sample_size_status": "LOW SAMPLE — do not rely" if item["matches"] < 30 else "CAUTION — limited evidence" if item["matches"] < 100 else "ADEQUATE SAMPLE",
+                } for target, item in sorted(binary_market_stats.items())
+            },
+        },
         "ml_walk_forward": {
             "status": "Evaluated" if ml_evaluated else "Insufficient prior training history",
             "training_examples_available_at_end": ml_total_training_examples,
