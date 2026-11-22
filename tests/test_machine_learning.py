@@ -162,5 +162,39 @@ class MachineLearningTests(unittest.TestCase):
         self.assertAlmostEqual(sum(prediction.values()), 1.0)
 
 
+    def test_independent_binary_market_models_train_and_return_valid_probabilities(self):
+        from machine_learning import train_binary_market_model, predict_binary_market
+        rows = []
+        for _ in range(60):
+            rows.append(({"home_xg": 1.8, "away_xg": 1.2}, 2, 1))
+            rows.append(({"home_xg": 0.5, "away_xg": 0.4}, 0, 0))
+            rows.append(({"home_xg": 2.0, "away_xg": 0.3}, 3, 0))
+            rows.append(({"home_xg": 0.8, "away_xg": 1.1}, 1, 1))
+        for target in ("over_1_5", "over_2_5", "over_3_5", "btts_yes"):
+            model = train_binary_market_model(rows, target, minimum_samples=100, epochs=30)
+            self.assertIsNotNone(model)
+            probability = predict_binary_market(model, {"home_xg": 1.8, "away_xg": 1.2})
+            self.assertGreaterEqual(probability, 0.0)
+            self.assertLessEqual(probability, 1.0)
+            self.assertEqual(model["target"], target)
+
+    def test_binary_market_model_rejects_unknown_target_and_sparse_classes(self):
+        from machine_learning import train_binary_market_model
+        with self.assertRaises(ValueError):
+            train_binary_market_model([], "match_winner")
+        rows = [({"home_xg": 1.0}, 0, 0)] * 250
+        self.assertIsNone(train_binary_market_model(rows, "btts_yes", minimum_samples=100))
+
+    def test_binary_market_model_preserves_missing_feature_indicators(self):
+        from machine_learning import train_binary_market_model, predict_binary_market
+        rows = []
+        for index in range(30):
+            rows.append(({"home_xg": 1.5, "away_xg": None}, 2, 1))
+            rows.append(({"home_xg": 0.4, "away_xg": None}, 0, 0))
+        model = train_binary_market_model(rows, "over_1_5", minimum_samples=50, epochs=20)
+        self.assertTrue(model["missing_indicators"])
+        self.assertTrue(0.0 <= predict_binary_market(model, {"home_xg": 1.2}) <= 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
