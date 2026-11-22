@@ -382,6 +382,7 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                     ml_component_names[3]: full_probabilities,
                     ml_component_names[4]: hybrid_probs,
                 }
+                fixture_brier_scores = {}
                 for candidate_name, candidate in candidate_models.items():
                     values = [max(1e-12, float(candidate[key])) for key in ml_keys]
                     total = sum(values)
@@ -389,11 +390,18 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                     predicted = max(range(3), key=lambda index: values[index])
                     brier = sum((values[index] - actual_vector[index]) ** 2 for index in range(3)) / 3.0
                     loss = -log(max(values[actual_index], 1e-15))
+                    fixture_brier_scores[candidate_name] = brier
                     stats = ml_audit_stats[candidate_name]
                     stats["matches"] += 1
                     stats["correct"] += int(predicted == actual_index)
                     stats["brier_sum"] += brier
                     stats["log_loss_sum"] += loss
+                production_brier = fixture_brier_scores[ml_component_names[0]]
+                for candidate_name, candidate_brier in fixture_brier_scores.items():
+                    stats = ml_audit_stats[candidate_name]
+                    delta = candidate_brier - production_brier
+                    stats["paired_delta_sum"] = stats.get("paired_delta_sum", 0.0) + delta
+                    stats["paired_delta_sq_sum"] = stats.get("paired_delta_sq_sum", 0.0) + delta * delta
                 ml_evaluated += 1
             def record_binary_market(name, raw_probability, actual_event):
                 raw_p = max(0.0, min(1.0, float(raw_probability)))
@@ -896,6 +904,13 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "accuracy": item["correct"] / item["matches"] if item["matches"] else None,
             "brier_score": item["brier_sum"] / item["matches"] if item["matches"] else None,
             "log_loss": item["log_loss_sum"] / item["matches"] if item["matches"] else None,
+            "brier_delta_vs_production": item.get("paired_delta_sum", 0.0) / item["matches"] if item["matches"] else None,
+            "brier_delta_95_ci": (
+                [
+                    (item["paired_delta_sum"] / item["matches"]) - 1.96 * sqrt(max(0.0, (item["paired_delta_sq_sum"] - item["paired_delta_sum"] ** 2 / item["matches"]) / max(1, item["matches"] - 1)) / item["matches"]),
+                    (item["paired_delta_sum"] / item["matches"]) + 1.96 * sqrt(max(0.0, (item["paired_delta_sq_sum"] - item["paired_delta_sum"] ** 2 / item["matches"]) / max(1, item["matches"] - 1)) / item["matches"]),
+                ] if item["matches"] > 1 else None
+            ),
         } for name, item in sorted(ml_audit_stats.items()) if item["matches"]],
         "ml_walk_forward": {
             "status": "Evaluated" if ml_evaluated else "Insufficient prior training history",

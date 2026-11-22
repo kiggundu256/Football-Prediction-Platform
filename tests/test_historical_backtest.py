@@ -298,6 +298,12 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertEqual(audit["common_fixture_count"], audit["evaluated_matches"])
         self.assertEqual(set(audit["model_match_counts"]), expected)
         self.assertEqual(set(audit["model_match_counts"].values()), {audit["common_fixture_count"]})
+        for name in expected:
+            self.assertIn("brier_delta_vs_production", models[name])
+            self.assertIn("brier_delta_95_ci", models[name])
+        production = models["AI audit: Production baseline (raw)"]
+        self.assertAlmostEqual(production["brier_delta_vs_production"], 0.0)
+        self.assertEqual(production["brier_delta_95_ci"], [0.0, 0.0])
         self.assertIn("same-day", audit["leakage_control"])
         self.assertIn("identical", audit["comparison"])
         self.assertEqual(audit["feature_ablation"]["full_ml_feature_count"], 56)
