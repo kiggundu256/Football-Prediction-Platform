@@ -178,9 +178,13 @@ def build_historical_training_rows(database_path, from_year=2020,
 
     db = sqlite3.connect(str(database_path))
     try:
-        rows = db.execute("""
-            SELECT fixture_id, match_date, competition, home_team_id, away_team_id,
-                   home_team, away_team, home_goals, away_goals, stats_json
+        available = {item[1] for item in db.execute("PRAGMA table_info(historical_matches)").fetchall()}
+        def column(name):
+            return name if name in available else "NULL"
+        rows = db.execute(f"""
+            SELECT fixture_id, match_date, {column("competition")}, {column("home_team_id")},
+                   {column("away_team_id")}, home_team, away_team, home_goals, away_goals,
+                   {column("stats_json")}
             FROM historical_matches
             WHERE match_date >= ? AND status IN ('FT','AET','PEN')
               AND home_goals IS NOT NULL AND away_goals IS NOT NULL
