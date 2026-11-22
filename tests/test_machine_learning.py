@@ -170,6 +170,8 @@ class MachineLearningTests(unittest.TestCase):
             rows.append(({"home_xg": 0.5, "away_xg": 0.4}, 0, 0))
             rows.append(({"home_xg": 2.0, "away_xg": 0.3}, 3, 0))
             rows.append(({"home_xg": 0.8, "away_xg": 1.1}, 1, 1))
+            # Include genuine 4+ goal outcomes so Over 3.5 has both classes.
+            rows.append(({"home_xg": 2.2, "away_xg": 1.8}, 3, 1))
         for target in ("over_1_5", "over_2_5", "over_3_5", "btts_yes"):
             model = train_binary_market_model(rows, target, minimum_samples=100, epochs=30)
             self.assertIsNotNone(model)
