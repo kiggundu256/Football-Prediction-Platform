@@ -11,7 +11,7 @@ from math import log, sqrt
 
 from model_ensemble import predict_ensemble
 from corners_engine import predict_corner_markets
-from machine_learning import build_model_features, predict_outcome, train_outcome_model
+from machine_learning import (BASE_FEATURE_NAMES, FEATURE_NAMES, build_model_features, predict_outcome, train_outcome_model)
 from elo_rating import EloRatingSystem
 from advanced_metrics import extract_match_team_metrics, build_match_advanced_features, METRIC_KEYS
 
@@ -251,11 +251,23 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     })
     market_stats = {}
     model_comparison = {}
-    ml_component_names = ("AI audit: Production baseline (raw)", "AI audit: Trained ML only (raw)", "AI audit: ML-assisted ensemble (raw)")
+    ml_component_names = (
+        "AI audit: Production baseline (raw)",
+        "AI audit: Core ML (6 features, raw)",
+        "AI audit: Core + Elo ML (8 features, raw)",
+        "AI audit: Full ML (56 features, raw)",
+        "AI audit: Full-feature ML-assisted ensemble (raw)",
+    )
     ml_audit_stats = {
         name: {"matches": 0, "correct": 0, "brier_sum": 0.0, "log_loss_sum": 0.0}
         for name in ml_component_names
     }
+    ml_feature_sets = {
+        ml_component_names[1]: BASE_FEATURE_NAMES,
+        ml_component_names[2]: BASE_FEATURE_NAMES + ("elo_difference", "elo_expected_home_score"),
+        ml_component_names[3]: FEATURE_NAMES,
+    }
+    ml_models = {}
     ml_training_rows = []
     ml_total_training_examples = 0
     ml_last_training_total = 0
@@ -291,9 +303,19 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
     # Grouping by date ensures a fixture cannot use another result from the same day.
     for match_date in sorted(daily_groups):
         day_rows = daily_groups[match_date]
-        if ml_total_training_examples >= 200 and (ml_model is None or ml_total_training_examples - ml_last_training_total >= 2000):
-            ml_model = train_outcome_model(ml_training_rows, minimum_samples=200, epochs=40)
-            if ml_model:
+        if ml_total_training_examples >= 200 and (
+            not ml_models or ml_total_training_examples - ml_last_training_total >= 2000
+        ):
+            candidate_models = {
+                name: train_outcome_model(
+                    ml_training_rows, minimum_samples=200, epochs=40,
+                    feature_names=feature_names,
+                )
+                for name, feature_names in ml_feature_sets.items()
+            }
+            if all(candidate_models.values()):
+                ml_models = candidate_models
+                ml_model = ml_models[ml_component_names[3]]
                 ml_last_training_total = ml_total_training_examples
                 ml_retrain_count += 1
         pending_ml_training_rows = []
@@ -339,19 +361,26 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 advanced_features=advanced_features,
             )
             pending_ml_training_rows.append((json.dumps(ml_features, sort_keys=True), actual_home, actual_away))
-            if ml_model:
-                ml_probabilities = predict_outcome(ml_model, ml_features)
+            if ml_models:
+                ml_keys = ("home_win", "draw", "away_win")
                 goal_probs = forecast["goal_model"]
                 form_probs = forecast["form_model"]
-                ml_keys = ("home_win", "draw", "away_win")
                 production_probs = {key: 0.75 * float(goal_probs[key]) + 0.25 * float(form_probs[key]) for key in ml_keys}
-                hybrid_probs = {key: 0.60 * float(goal_probs[key]) + 0.20 * float(form_probs[key]) + 0.20 * float(ml_probabilities[key]) for key in ml_keys}
+                core_probabilities = predict_outcome(ml_models[ml_component_names[1]], ml_features)
+                elo_probabilities = predict_outcome(ml_models[ml_component_names[2]], ml_features)
+                full_probabilities = predict_outcome(ml_models[ml_component_names[3]], ml_features)
+                hybrid_probs = {
+                    key: 0.60 * float(goal_probs[key]) + 0.20 * float(form_probs[key]) + 0.20 * float(full_probabilities[key])
+                    for key in ml_keys
+                }
                 actual_index = 0 if actual_home > actual_away else (2 if actual_home < actual_away else 1)
                 actual_vector = [1.0 if index == actual_index else 0.0 for index in range(3)]
                 candidate_models = {
                     ml_component_names[0]: production_probs,
-                    ml_component_names[1]: ml_probabilities,
-                    ml_component_names[2]: hybrid_probs,
+                    ml_component_names[1]: core_probabilities,
+                    ml_component_names[2]: elo_probabilities,
+                    ml_component_names[3]: full_probabilities,
+                    ml_component_names[4]: hybrid_probs,
                 }
                 for candidate_name, candidate in candidate_models.items():
                     values = [max(1e-12, float(candidate[key])) for key in ml_keys]
@@ -366,7 +395,6 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                     stats["brier_sum"] += brier
                     stats["log_loss_sum"] += loss
                 ml_evaluated += 1
-
             def record_binary_market(name, raw_probability, actual_event):
                 raw_p = max(0.0, min(1.0, float(raw_probability)))
                 probability = _prequential_calibrate_from_bins(
@@ -880,7 +908,13 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
             "model_match_counts": ml_audit_match_counts,
             "retraining_policy": "Initial fit after 200 prior-date examples; refit after each additional 2,000 examples; maximum 4,000 most recent examples; 40 epochs.",
             "leakage_control": "The model is frozen for each calendar date; that date's labels enter training only after all same-day forecasts are complete.",
-            "comparison": "Production 75/25 Poisson-form blend, ML alone, and current 60/20/20 Poisson-form-ML blend are scored on identical ML-active fixtures using raw probabilities.",
+            "comparison": "Production 75/25 Poisson-form blend, six-feature core ML, eight-feature core-plus-Elo ML, full 56-feature ML, and 60/20/20 full-feature ML-assisted blend are scored on identical ML-active fixtures using raw probabilities.",
+            "feature_ablation": {
+                "core_ml_features": list(BASE_FEATURE_NAMES),
+                "elo_ml_features": list(BASE_FEATURE_NAMES + ("elo_difference", "elo_expected_home_score")),
+                "full_ml_feature_count": len(FEATURE_NAMES),
+                "purpose": "Measure the incremental value of Elo and advanced statistics instead of assuming that more features improve predictions.",
+            },
         },
         "by_market": _finalize_market_stats(market_stats),
         "by_competition_season": groups,

@@ -286,7 +286,13 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertGreaterEqual(audit["retraining_events"], 1)
         self.assertGreater(audit["evaluated_matches"], 0)
         models = {item["model"]: item for item in result["by_model"]}
-        expected = {"AI audit: Production baseline (raw)", "AI audit: Trained ML only (raw)", "AI audit: ML-assisted ensemble (raw)"}
+        expected = {
+            "AI audit: Production baseline (raw)",
+            "AI audit: Core ML (6 features, raw)",
+            "AI audit: Core + Elo ML (8 features, raw)",
+            "AI audit: Full ML (56 features, raw)",
+            "AI audit: Full-feature ML-assisted ensemble (raw)",
+        }
         self.assertTrue(expected.issubset(models))
         self.assertEqual({models[name]["matches"] for name in expected}, {audit["evaluated_matches"]})
         self.assertEqual(audit["common_fixture_count"], audit["evaluated_matches"])
@@ -294,6 +300,9 @@ class HistoricalBacktestTests(unittest.TestCase):
         self.assertEqual(set(audit["model_match_counts"].values()), {audit["common_fixture_count"]})
         self.assertIn("same-day", audit["leakage_control"])
         self.assertIn("identical", audit["comparison"])
+        self.assertEqual(audit["feature_ablation"]["full_ml_feature_count"], 56)
+        self.assertEqual(len(audit["feature_ablation"]["core_ml_features"]), 6)
+        self.assertEqual(len(audit["feature_ablation"]["elo_ml_features"]), 8)
 
 
     def test_same_day_fixtures_share_pre_day_elo_ratings(self):

@@ -128,6 +128,22 @@ class MachineLearningTests(unittest.TestCase):
         self.assertIsNone(features["home_corners_for_avg"])
         self.assertEqual(features["home_corners_samples"], 0)
 
+    def test_model_can_train_with_selected_feature_subset(self):
+        rows = []
+        for _ in range(30):
+            rows.append((json.dumps({"home_xg": 2.0, "away_xg": 0.6}), 2, 0))
+            rows.append((json.dumps({"home_xg": 1.0, "away_xg": 1.0}), 1, 1))
+            rows.append((json.dumps({"home_xg": 0.6, "away_xg": 2.0}), 0, 2))
+        model = train_outcome_model(rows, minimum_samples=80, epochs=20,
+                                    feature_names=("home_xg", "away_xg"))
+        self.assertEqual(model["feature_names"], ["home_xg", "away_xg"])
+        prediction = predict_outcome(model, {"home_xg": 2.0, "away_xg": 0.6})
+        self.assertAlmostEqual(sum(prediction.values()), 1.0)
+
+    def test_selected_feature_subset_rejects_unknown_features(self):
+        with self.assertRaises(ValueError):
+            train_outcome_model([], feature_names=("unknown_metric",))
+
     def test_sparse_advanced_features_train_and_predict_with_missing_indicators(self):
         rows = []
         for index in range(70):

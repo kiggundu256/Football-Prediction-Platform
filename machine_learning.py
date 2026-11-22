@@ -81,14 +81,17 @@ def _softmax(scores):
     return [value / total for value in values]
 
 
-def train_outcome_model(rows, minimum_samples=200, epochs=120, learning_rate=0.06, l2=0.01):
-    """Train from settled outcomes; missing inputs are median-mean imputed with explicit flags."""
+def train_outcome_model(rows, minimum_samples=200, epochs=120, learning_rate=0.06, l2=0.01, feature_names=None):
+    """Train from settled outcomes using a selectable, versioned feature subset."""
+    names = tuple(feature_names or FEATURE_NAMES)
+    if not names or any(name not in FEATURE_NAMES for name in names):
+        raise ValueError("feature_names must be a non-empty subset of the supported schema")
     import json
     parsed, labels = [], []
     for raw_features, home_goals, away_goals in rows:
         try:
             features = json.loads(raw_features) if isinstance(raw_features, str) else raw_features
-            vector = _vector(features)
+            vector = _vector(features, names)
             if home_goals is None or away_goals is None:
                 continue
             label = "home_win" if home_goals > away_goals else ("away_win" if home_goals < away_goals else "draw")
@@ -100,7 +103,7 @@ def train_outcome_model(rows, minimum_samples=200, epochs=120, learning_rate=0.0
     if len(parsed) < minimum_samples or any(counts[index] < 10 for index in range(3)):
         return None
 
-    width = len(FEATURE_NAMES)
+    width = len(names)
     means, scales = [], []
     for col in range(width):
         observed = [row[col] for row in parsed if row[col] is not None]
@@ -141,7 +144,7 @@ def train_outcome_model(rows, minimum_samples=200, epochs=120, learning_rate=0.0
                 weights[k][col] -= learning_rate * gradient
 
     return {
-        "classes": list(CLASSES), "feature_names": list(FEATURE_NAMES),
+        "classes": list(CLASSES), "feature_names": list(names),
         "means": means, "scales": scales, "weights": weights,
         "samples": len(parsed),
         "class_counts": {CLASSES[index]: counts[index] for index in range(3)},
