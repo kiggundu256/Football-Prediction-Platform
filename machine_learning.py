@@ -48,7 +48,7 @@ def build_model_features(home_profile, away_profile, home_xg, away_xg,
                 name = f"{side}_{metric}_{suffix}"
                 value = advanced.get(name)
                 if value is None:
-                    result[name] = None
+                    result[name] = 0.0 if suffix == "samples" else None
                 else:
                     try:
                         number = float(value)
