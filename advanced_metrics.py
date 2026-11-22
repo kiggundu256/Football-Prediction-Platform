@@ -99,3 +99,74 @@ def build_match_advanced_features(home_history, away_history, window=10):
             for metric in METRIC_KEYS
         },
     }
+
+
+def build_pre_match_advanced_features(database_path, before_date, home_team_id=None,
+                                      away_team_id=None, home_team_name="", away_team_name="",
+                                      window=10):
+    """Load only pre-fixture observed statistics for both teams from the local database."""
+    import sqlite3
+    from collections import defaultdict
+
+    empty = build_match_advanced_features([], [], window)
+    if not before_date:
+        return empty
+    def key(value):
+        return str(value or "").strip().casefold()
+
+    histories = {"home": [], "away": []}
+    db = sqlite3.connect(str(database_path))
+    try:
+        rows = db.execute("""
+            SELECT match_date, home_team_id, away_team_id, home_team, away_team, stats_json
+            FROM historical_matches
+            WHERE match_date < ?
+              AND status IN ('FT','AET','PEN')
+              AND home_goals IS NOT NULL AND away_goals IS NOT NULL
+              AND (
+                (? IS NOT NULL AND (home_team_id = ? OR away_team_id = ?))
+                OR (? IS NOT NULL AND (home_team_id = ? OR away_team_id = ?))
+                OR lower(trim(COALESCE(home_team,''))) = lower(trim(?))
+                OR lower(trim(COALESCE(away_team,''))) = lower(trim(?))
+                OR lower(trim(COALESCE(home_team,''))) = lower(trim(?))
+                OR lower(trim(COALESCE(away_team,''))) = lower(trim(?))
+              )
+            ORDER BY match_date DESC, fixture_id DESC
+            LIMIT ?
+        """, (
+            str(before_date)[:10],
+            home_team_id, home_team_id, home_team_id,
+            away_team_id, away_team_id, away_team_id,
+            str(home_team_name or ""), str(home_team_name or ""),
+            str(away_team_name or ""), str(away_team_name or ""),
+            max(40, int(window) * 8),
+        )).fetchall()
+    except sqlite3.Error:
+        rows = []
+    finally:
+        db.close()
+
+    from advanced_metrics import extract_match_team_metrics
+    for match_date, home_id, away_id, home_name, away_name, stats_json in reversed(rows):
+        metrics = extract_match_team_metrics(stats_json, home_id, away_id)
+        if ((home_team_id is not None and str(home_id) == str(home_team_id))
+                or key(home_name) == key(home_team_name)):
+            histories["home"].append({
+                "advanced_for": metrics["home"], "advanced_against": metrics["away"],
+            })
+        if ((away_team_id is not None and str(away_id) == str(away_team_id))
+                or key(away_name) == key(away_team_name)):
+            histories["home"].append({
+                "advanced_for": metrics["away"], "advanced_against": metrics["home"],
+            })
+        if ((home_team_id is not None and str(home_id) == str(away_team_id))
+                or key(home_name) == key(away_team_name)):
+            histories["away"].append({
+                "advanced_for": metrics["home"], "advanced_against": metrics["away"],
+            })
+        if ((away_team_id is not None and str(away_id) == str(away_team_id))
+                or key(away_name) == key(away_team_name)):
+            histories["away"].append({
+                "advanced_for": metrics["away"], "advanced_against": metrics["home"],
+            })
+    return build_match_advanced_features(histories["home"][-window:], histories["away"][-window:], window)

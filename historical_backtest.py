@@ -333,7 +333,11 @@ def run_historical_backtest(database_path, from_year=2020, minimum_history=5, ma
                 item["away_samples"] += int(coverage["away_samples"] > 0)
                 item["both_teams_available"] += int(coverage["available_for_both"])
             actual_home, actual_away = int(row["home_goals"]), int(row["away_goals"])
-            ml_features = build_model_features(home_profile, away_profile, forecast["home_xg"], forecast["away_xg"])
+            ml_features = build_model_features(
+                home_profile, away_profile, forecast["home_xg"], forecast["away_xg"],
+                elo_home_rating=home_elo, elo_away_rating=away_elo,
+                advanced_features=advanced_features,
+            )
             pending_ml_training_rows.append((json.dumps(ml_features, sort_keys=True), actual_home, actual_away))
             if ml_model:
                 ml_probabilities = predict_outcome(ml_model, ml_features)

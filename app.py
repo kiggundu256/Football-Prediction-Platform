@@ -28,6 +28,7 @@ from corners_engine import predict_corner_markets
 from model_ensemble import predict_ensemble
 from elo_rating import build_pre_match_elo_ratings
 from machine_learning import build_model_features, build_historical_training_rows, train_outcome_model, predict_outcome
+from advanced_metrics import build_pre_match_advanced_features
 from fixture_intelligence import summarize_injuries, summarize_lineups
 from weather_client import fetch_match_weather
 from analysis_explainer import team_profile, build_analysis_explanation
@@ -2869,7 +2870,19 @@ class MainWindow(QMainWindow):
 
         home_xg_seed = max(0.05, (hr["scored_avg"] + ar["conceded_avg"]) / 2)
         away_xg_seed = max(0.05, (ar["scored_avg"] + hr["conceded_avg"]) / 2)
-        model_features = build_model_features(hr, ar, home_xg_seed, away_xg_seed)
+        competition_name = ((item.get("league") or {}).get("name") or "Unknown")
+        elo_ratings = build_pre_match_elo_ratings(
+            self.store.path, fixture_date, competition_name, home_name, away_name,
+        )
+        advanced_features = build_pre_match_advanced_features(
+            self.store.path, fixture_date, home_id, away_id, home_name, away_name,
+        )
+        model_features = build_model_features(
+            hr, ar, home_xg_seed, away_xg_seed,
+            elo_home_rating=elo_ratings["home"],
+            elo_away_rating=elo_ratings["away"],
+            advanced_features=advanced_features,
+        )
         if automatic_scan and scan_context is not None:
             if not scan_context["training_loaded"]:
                 training_started = time.perf_counter()
@@ -2913,10 +2926,6 @@ class MainWindow(QMainWindow):
             ),
             "Corner history: " + ("Loaded" if corner_averages else "Not loaded / insufficient coverage"),
         ]
-        competition_name = ((item.get("league") or {}).get("name") or "Unknown")
-        elo_ratings = build_pre_match_elo_ratings(
-            self.store.path, fixture_date, competition_name, home_name, away_name,
-        )
         ensemble = predict_ensemble(
             hr, ar, ml_probabilities=ml_probabilities,
             ml_samples=local_ml["samples"] if local_ml else 0,

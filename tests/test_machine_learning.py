@@ -119,3 +119,30 @@ class MachineLearningTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_feature_builder_includes_elo_and_preserves_missing_advanced_metrics(self):
+        home = {"played": 5, "wins": 3, "draws": 1, "scored_avg": 1.8, "conceded_avg": 0.8}
+        away = {"played": 5, "wins": 1, "draws": 2, "scored_avg": 1.0, "conceded_avg": 1.4}
+        features = build_model_features(home, away, 1.6, 0.9, 1600, 1500)
+        self.assertGreater(features["elo_difference"], 0)
+        self.assertGreater(features["elo_expected_home_score"], 0.5)
+        self.assertIsNone(features["home_corners_for_avg"])
+        self.assertEqual(features["home_corners_samples"], 0)
+
+    def test_sparse_advanced_features_train_and_predict_with_missing_indicators(self):
+        rows = []
+        for index in range(70):
+            rows.append((json.dumps({"home_xg": 1.9, "away_xg": 0.7,
+                "home_points_per_game": 2.2, "away_points_per_game": 0.8,
+                "home_goal_difference": 0.9, "away_goal_difference": -0.7}), 2, 0))
+            rows.append((json.dumps({"home_xg": 1.0, "away_xg": 1.0,
+                "home_points_per_game": 1.2, "away_points_per_game": 1.2,
+                "home_goal_difference": 0.0, "away_goal_difference": 0.0}), 1, 1))
+            rows.append((json.dumps({"home_xg": 0.7, "away_xg": 1.9,
+                "home_points_per_game": 0.8, "away_points_per_game": 2.2,
+                "home_goal_difference": -0.7, "away_goal_difference": 0.9}), 0, 2))
+        model = train_outcome_model(rows, minimum_samples=200, epochs=40)
+        self.assertTrue(model["missing_indicators"])
+        prediction = predict_outcome(model, json.loads(rows[0][0]))
+        self.assertAlmostEqual(sum(prediction.values()), 1.0)
