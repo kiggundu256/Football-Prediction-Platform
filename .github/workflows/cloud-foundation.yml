@@ -7,6 +7,13 @@ on:
       - "cloud/**"
       - "scripts/migrate_sqlite_to_postgres.py"
       - "docs/CLOUD_MIGRATION_STATUS.md"
+      - "historical_database.py"
+      - "intelligent_scanner.py"
+      - "model_ensemble.py"
+      - "prediction_engine.py"
+      - "corners_engine.py"
+      - "probability_calibration.py"
+      - "tests/**"
       - ".github/workflows/cloud-foundation.yml"
   push:
     branches: [cloud-migration]
@@ -14,6 +21,13 @@ on:
       - "cloud/**"
       - "scripts/migrate_sqlite_to_postgres.py"
       - "docs/CLOUD_MIGRATION_STATUS.md"
+      - "historical_database.py"
+      - "intelligent_scanner.py"
+      - "model_ensemble.py"
+      - "prediction_engine.py"
+      - "corners_engine.py"
+      - "probability_calibration.py"
+      - "tests/**"
       - ".github/workflows/cloud-foundation.yml"
 
 jobs:
