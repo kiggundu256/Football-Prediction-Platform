@@ -10,7 +10,10 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QThread, Signal
+try:
+    from PySide6.QtCore import QThread, Signal
+except (ImportError, OSError):
+    from cloud.qt_compat import QThread, Signal
 
 from api_football import (
     ApiFootballError, fetch_fixture_injuries, fetch_fixture_lineups,
@@ -60,8 +63,10 @@ class IntelligentScannerWorker(QThread):
     failed = Signal(str)
 
     def __init__(self, fixtures, database_path, training_records, calibration_profile,
-                 api_key="", mode="intelligent", shortlist_size=20, history_limit=5):
+                 api_key="", mode="intelligent", shortlist_size=20, history_limit=5,
+                 database_factory=None):
         super().__init__()
+        self.database_factory = database_factory or HistoricalDatabase
         self.fixtures = list(fixtures)
         self.database_path = str(database_path)
         self.training_records = list(training_records or [])
@@ -440,7 +445,7 @@ class IntelligentScannerWorker(QThread):
     def run(self):
         started = time.perf_counter()
         try:
-            database = HistoricalDatabase(self.database_path)
+            database = self.database_factory(self.database_path)
             self._history_cache = {}
             self._prefetch_histories(database)
             self._calibration_current = self._calibration_is_current(database)
