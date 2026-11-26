@@ -10,6 +10,7 @@ class _ConnectionCompat:
     def execute(self, query, params=()):
         query = query.replace("?", "%s")
         query = query.replace("MAX(match_date)", "MAX(match_date)::text")
+        query = query.replace("match_date >= %s", "match_date >= %s::date")
         return self.connection.execute(query, params)
 
 
