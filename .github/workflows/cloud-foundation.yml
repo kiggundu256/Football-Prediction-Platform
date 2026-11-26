@@ -16,6 +16,7 @@ on:
       - "tests/**"
       - ".github/workflows/cloud-foundation.yml"
       - ".github/workflows/cloud-scheduled-scan.yml"
+      - ".github/workflows/cloud-scheduled-scan.yml"
   push:
     branches: [cloud-migration]
     paths:
@@ -30,6 +31,7 @@ on:
       - "probability_calibration.py"
       - "tests/**"
       - ".github/workflows/cloud-foundation.yml"
+      - ".github/workflows/cloud-scheduled-scan.yml"
 
 jobs:
   syntax-and-schema:
@@ -49,8 +51,10 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run existing regression tests
         run: python -m unittest discover -s tests -v
-      - name: Compile migration utility
-        run: python -m py_compile scripts/migrate_sqlite_to_postgres.py
+      - name: Compile cloud worker and migration modules
+        run: |
+          python -m py_compile scripts/migrate_sqlite_to_postgres.py
+          python -m py_compile intelligent_scanner.py cloud/postgres_historical_database.py cloud/scheduled_scan.py cloud/qt_compat.py
       - name: Validate schema invariants
         run: |
           python - <<'PY'
