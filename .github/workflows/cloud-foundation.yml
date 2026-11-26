@@ -1,6 +1,7 @@
 name: Cloud migration foundation checks
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - "cloud/**"
