@@ -60,3 +60,19 @@ CREATE TABLE IF NOT EXISTS cloud_job_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_cloud_job_runs_started
     ON cloud_job_runs(job_name, started_at DESC);
+
+
+-- Immutable forecast snapshots preserve what the model knew at each scan time.
+CREATE TABLE IF NOT EXISTS cloud_fixture_predictions (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    fixture_id BIGINT NOT NULL,
+    kickoff_at TIMESTAMPTZ NOT NULL,
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    forecast_version TEXT NOT NULL,
+    payload_json JSONB NOT NULL,
+    UNIQUE (fixture_id, generated_at)
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_predictions_fixture_time
+    ON cloud_fixture_predictions(fixture_id, generated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cloud_predictions_kickoff
+    ON cloud_fixture_predictions(kickoff_at);
