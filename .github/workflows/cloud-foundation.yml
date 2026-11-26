@@ -15,6 +15,7 @@ on:
       - "probability_calibration.py"
       - "tests/**"
       - ".github/workflows/cloud-foundation.yml"
+      - ".github/workflows/cloud-scheduled-scan.yml"
   push:
     branches: [cloud-migration]
     paths:
