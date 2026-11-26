@@ -16,11 +16,17 @@
 - Documented the free-first target architecture and migration guardrails.
 
 - Removed an unintended 2026-only cutoff from all three team-history lookup paths (ID, name fallback, and batched lookup). Forecasts now use the available archive strictly before kickoff, including 2020+ rows.
-- Added regression tests covering older-season inclusion and exclusion of same-day/future matches. These tests are included in the existing unittest discovery suite; execution status is pending a confirmed GitHub Actions run.
+- Added regression tests covering older-season inclusion and exclusion of same-day/future matches. The full cloud foundation and Windows regression workflows passed.
+
+- Added a PostgreSQL read adapter for the scanner's historical team-form and corner-history lookups, preserving the 2020+ and pre-kickoff constraints.
+- Made the existing scanner injectable with a database adapter and added a no-Qt fallback for cloud execution. Desktop runs still use PySide6.
+- Added a scheduled scan entry point that reuses the existing ensemble and stores immutable forecast snapshots plus job audit records.
+- Added a gated GitHub Actions schedule (every 8 hours) that skips safely until both required repository secrets exist. It scans today's and tomorrow's fixtures and currently runs the fast local stage only; optional injuries/lineups/weather enrichment remains separately gated.
+- Added adapter and headless-signal unit tests.
 
 ## Still gated
 
 - Provisioning Supabase/hosting requires the user's provider account authorization and secrets.
 - The migration itself requires a real copy of the user's local SQLite database and a configured PostgreSQL URL. Neither is available in the GitHub repository.
-- Scheduled production scanning must remain disabled until data migration, model parity tests, secrets, quota controls, and deployment health checks pass.
-- The current fixture scanner contains Qt dependencies and must be extracted behind a headless service interface before scheduling.
+- The scheduled workflow cannot run from this draft branch on a timer until the workflow is merged into the default branch. It also needs `DATABASE_URL` and `API_FOOTBALL_KEY` repository secrets.
+- The scheduled scanner must remain inactive until the real archive is migrated and model parity is checked against the desktop app. The current scheduled stage intentionally does not make injury/lineup/weather API calls.
