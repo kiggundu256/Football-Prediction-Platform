@@ -46,10 +46,10 @@ class HistoricalDatabaseTests(unittest.TestCase):
             fixture(4, "2026-09-10", 10, 20, 3, 0, "NS"),
         ])
         rows = self.db.team_recent_matches(10, "2026-10-01", limit=5)
-        self.assertEqual([item["fixture"]["id"] for item in rows], [3, 2])
+        self.assertEqual([item["fixture"]["id"] for item in rows], [3, 2, 1])
         self.assertEqual(rows[0]["goals"]["home"], 1)
 
-    def test_recent_matches_batch_excludes_2025_and_uses_latest_2026_only(self):
+    def test_recent_matches_batch_includes_archive_and_uses_latest_before_fixture(self):
         self.db.upsert_fixtures([
             fixture(11, "2025-12-20", 10, 20, 1, 0),
             fixture(12, "2026-01-05", 20, 10, 0, 0),
