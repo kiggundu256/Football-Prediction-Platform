@@ -154,7 +154,7 @@ class HistoricalDatabase:
     def team_recent_matches_by_name(self, team_name, before_date, limit=5, provider_team_id=None):
         """Use indexed exact-name lookup first; retain normalized fallback for aliases.
 
-        Recent-form comparisons are restricted to completed 2026 matches only.
+        Only completed matches strictly before the requested fixture date are eligible.
         """
         key = self._team_name_key(team_name)
         if not key:
@@ -163,7 +163,7 @@ class HistoricalDatabase:
             rows = db.execute("""
                 SELECT payload_json FROM historical_matches
                 WHERE (home_team = ? OR away_team = ?)
-                  AND match_date >= '2026-01-01' AND match_date < ?
+                  AND match_date < ?
                   AND status IN ('FT','AET','PEN')
                   AND home_goals IS NOT NULL AND away_goals IS NOT NULL
                 ORDER BY COALESCE(json_extract(payload_json, '$.fixture.date'), match_date) DESC, fixture_id DESC LIMIT ?
@@ -174,7 +174,7 @@ class HistoricalDatabase:
                 # imported team names are available.
                 rows = db.execute("""
                     SELECT payload_json FROM historical_matches
-                    WHERE match_date >= '2026-01-01' AND match_date < ?
+                    WHERE match_date < ?
                       AND status IN ('FT','AET','PEN')
                       AND home_goals IS NOT NULL AND away_goals IS NOT NULL
                     ORDER BY COALESCE(json_extract(payload_json, '$.fixture.date'), match_date) DESC, fixture_id DESC
@@ -239,7 +239,7 @@ class HistoricalDatabase:
         """Fetch recent histories for many teams in batched, date-safe SQL queries.
 
         Each request is a mapping with key, team_id, team_name and before_date.
-        Results are keyed by the supplied key and contain only completed 2026 matches
+        Results are keyed by the supplied key and contain only completed matches
         strictly earlier than that fixture's kickoff date.
         """
         output = {}
@@ -276,7 +276,7 @@ class HistoricalDatabase:
                            (r.team_name <> '' AND
                             (h.home_team = r.team_name OR h.away_team = r.team_name))
                       )
-                    WHERE h.match_date >= '2026-01-01' AND h.match_date < r.before_date
+                    WHERE h.match_date < r.before_date
                       AND h.status IN ('FT','AET','PEN')
                       AND h.home_goals IS NOT NULL AND h.away_goals IS NOT NULL
                 )
@@ -310,7 +310,7 @@ class HistoricalDatabase:
             rows = db.execute("""
                 SELECT payload_json FROM historical_matches
                 WHERE (home_team_id=? OR away_team_id=?)
-                  AND match_date >= '2026-01-01' AND match_date < ?
+                  AND match_date < ?
                   AND status IN ('FT','AET','PEN')
                   AND home_goals IS NOT NULL AND away_goals IS NOT NULL
                 ORDER BY COALESCE(json_extract(payload_json, '$.fixture.date'), match_date) DESC, fixture_id DESC LIMIT ?
