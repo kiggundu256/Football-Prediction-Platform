@@ -2,6 +2,17 @@
 import json
 from contextlib import contextmanager
 
+class _ConnectionCompat:
+    """Translate the small SQLite-style SQL subset used by the shared scanner."""
+    def __init__(self, connection):
+        self.connection = connection
+
+    def execute(self, query, params=()):
+        query = query.replace("?", "%s")
+        query = query.replace("MAX(match_date)", "MAX(match_date)::text")
+        return self.connection.execute(query, params)
+
+
 class PostgresHistoricalDatabase:
     def __init__(self, database_url):
         if not database_url:
@@ -16,7 +27,7 @@ class PostgresHistoricalDatabase:
         except ImportError:
             raise RuntimeError("Install cloud requirements before using PostgreSQL history.") from None
         with psycopg.connect(self.database_url) as connection:
-            yield connection
+            yield _ConnectionCompat(connection)
 
     @staticmethod
     def _team_name_key(value):
