@@ -28,19 +28,20 @@ class HistoricalDatabaseHistoryTests(unittest.TestCase):
 
     def test_team_id_history_includes_2020_plus_and_excludes_fixture_day_and_future(self):
         self.db.upsert_fixtures([
-            fixture(1, "2021-08-01"), fixture(2, "2025-08-01"),
+            fixture(0, "2019-08-01"), fixture(1, "2021-08-01"), fixture(2, "2025-08-01"),
             fixture(3, "2026-11-25"), fixture(4, "2026-11-26"),
             fixture(5, "2027-01-01"),
         ])
         matches = self.db.team_recent_matches(10, "2026-11-26", limit=10)
         ids = [item["fixture"]["id"] for item in matches]
         self.assertEqual(set(ids), {1, 2, 3})
+        self.assertNotIn(0, ids)
         self.assertNotIn(4, ids)
         self.assertNotIn(5, ids)
 
     def test_team_name_history_includes_older_archive(self):
         self.db.upsert_fixtures([
-            fixture(11, "2020-09-12"), fixture(12, "2024-09-12"),
+            fixture(10, "2019-09-12"), fixture(11, "2020-09-12"), fixture(12, "2024-09-12"),
             fixture(13, "2026-09-12"),
         ])
         matches = self.db.team_recent_matches_by_name("Alpha FC", "2026-10-01", limit=10)
@@ -48,7 +49,7 @@ class HistoricalDatabaseHistoryTests(unittest.TestCase):
 
     def test_batched_history_uses_same_pre_fixture_date_rule(self):
         self.db.upsert_fixtures([
-            fixture(21, "2022-05-01"), fixture(22, "2026-05-01"),
+            fixture(20, "2019-05-01"), fixture(21, "2022-05-01"), fixture(22, "2026-05-01"),
             fixture(23, "2026-06-01"), fixture(24, "2027-01-01"),
         ])
         result = self.db.team_recent_matches_batch([{
@@ -57,6 +58,7 @@ class HistoricalDatabaseHistoryTests(unittest.TestCase):
         }], limit=10)
         ids = {item["fixture"]["id"] for item in result["alpha-before-june"]}
         self.assertEqual(ids, {21, 22})
+        self.assertNotIn(20, ids)
         self.assertNotIn(23, ids)
         self.assertNotIn(24, ids)
 
