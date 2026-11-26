@@ -60,7 +60,7 @@ class PostgresHistoricalDatabase:
         requests = [item for item in (requests or []) if item.get("before_date")]
         for offset in range(0, len(requests), 100):
             batch = requests[offset:offset + 100]
-            values = ",".join(["(%s,%s,%s,%s::date)"] * len(batch))
+            values = ",".join(["(%s::text,%s::bigint,%s::text,%s::date)"] * len(batch))
             params = []
             for item in batch:
                 params.extend((str(item["key"]),
