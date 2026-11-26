@@ -1,0 +1,80 @@
+name: Cloud migration foundation checks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "cloud/**"
+      - "scripts/migrate_sqlite_to_postgres.py"
+      - "docs/CLOUD_MIGRATION_STATUS.md"
+      - "historical_database.py"
+      - "intelligent_scanner.py"
+      - "model_ensemble.py"
+      - "prediction_engine.py"
+      - "corners_engine.py"
+      - "probability_calibration.py"
+      - "tests/**"
+      - ".github/workflows/cloud-foundation.yml"
+      - ".github/workflows/cloud-scheduled-scan.yml"
+  push:
+    branches: [cloud-migration]
+    paths:
+      - "cloud/**"
+      - "scripts/migrate_sqlite_to_postgres.py"
+      - "docs/CLOUD_MIGRATION_STATUS.md"
+      - "historical_database.py"
+      - "intelligent_scanner.py"
+      - "model_ensemble.py"
+      - "prediction_engine.py"
+      - "corners_engine.py"
+      - "probability_calibration.py"
+      - "tests/**"
+      - ".github/workflows/cloud-foundation.yml"
+      - ".github/workflows/cloud-scheduled-scan.yml"
+
+jobs:
+  syntax-and-schema:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Qt system libraries for desktop regression imports
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1
+      - name: Install application dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run existing regression tests
+        run: python -m unittest discover -s tests -v
+      - name: Compile cloud worker and migration modules
+        run: |
+          python -m py_compile scripts/migrate_sqlite_to_postgres.py
+          python -m py_compile intelligent_scanner.py cloud/postgres_historical_database.py cloud/scheduled_scan.py cloud/qt_compat.py
+      - name: Verify scanner imports without the desktop Qt runtime
+        run: |
+          python -m venv .venv-cloud
+          .venv-cloud/bin/python -m pip install -r cloud/requirements.txt
+          PYTHONPATH=. .venv-cloud/bin/python -c "from intelligent_scanner import IntelligentScannerWorker; from cloud.postgres_historical_database import PostgresHistoricalDatabase; print('Headless scanner imports successfully.')"
+      - name: Validate schema invariants
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          sql = Path("cloud/schema.sql").read_text(encoding="utf-8").lower()
+          required = (
+              "historical_competitions",
+              "historical_matches",
+              "historical_syncs",
+              "cloud_job_runs",
+              "payload_json jsonb not null",
+              "stats_json jsonb",
+              "primary key",
+          )
+          missing = [item for item in required if item not in sql]
+          if missing:
+              raise SystemExit("Missing schema invariants: " + ", ".join(missing))
+          print("Cloud schema invariants verified.")
+          PY
