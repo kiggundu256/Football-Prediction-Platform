@@ -1,0 +1,46 @@
+name: Cloud migration foundation checks
+
+on:
+  pull_request:
+    paths:
+      - "cloud/**"
+      - "scripts/migrate_sqlite_to_postgres.py"
+      - "docs/CLOUD_MIGRATION_STATUS.md"
+      - ".github/workflows/cloud-foundation.yml"
+  push:
+    branches: [cloud-migration]
+    paths:
+      - "cloud/**"
+      - "scripts/migrate_sqlite_to_postgres.py"
+      - "docs/CLOUD_MIGRATION_STATUS.md"
+      - ".github/workflows/cloud-foundation.yml"
+
+jobs:
+  syntax-and-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile migration utility
+        run: python -m py_compile scripts/migrate_sqlite_to_postgres.py
+      - name: Validate schema invariants
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          sql = Path("cloud/schema.sql").read_text(encoding="utf-8").lower()
+          required = (
+              "historical_competitions",
+              "historical_matches",
+              "historical_syncs",
+              "cloud_job_runs",
+              "payload_json jsonb not null",
+              "stats_json jsonb",
+              "primary key",
+          )
+          missing = [item for item in required if item not in sql]
+          if missing:
+              raise SystemExit("Missing schema invariants: " + ", ".join(missing))
+          print("Cloud schema invariants verified.")
+          PY
