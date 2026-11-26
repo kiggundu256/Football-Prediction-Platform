@@ -23,3 +23,34 @@ The migration is deliberately additive and preserves the source fixture ID as th
 ## Current status
 
 Foundation only. No production database, hosting account, credentials, or deployment has been provisioned by this repository change. The worker must not be enabled until database credentials and a verified data migration are available.
+
+## Headless scheduled scanner
+
+The cloud scanner reuses IntelligentScannerWorker and the existing pure-Python
+prediction modules. It injects PostgresHistoricalDatabase for read-only
+2020+ team-history and corner-history queries. The desktop app continues to use
+its original SQLite HistoricalDatabase and PySide6 worker.
+
+The first scheduled stage is intentionally conservative:
+
+- Fetches today's and tomorrow's fixtures from API-Football (two fixture-list requests per run).
+- Uses the latest five completed team matches strictly before each fixture date.
+- Runs the existing Poisson + recent-form ensemble; trained ML is inactive until
+  a verified cloud training dataset is available.
+- Does not make injuries, lineups, venue or weather requests yet.
+- Saves immutable probability snapshots to cloud_fixture_predictions and
+  records each execution in cloud_job_runs.
+
+Install the lightweight cloud dependencies and provide DATABASE_URL and
+API_FOOTBALL_KEY as environment secrets:
+
+```bash
+python -m pip install -r cloud/requirements.txt
+python -m cloud.scheduled_scan
+```
+
+The GitHub Actions schedule is every eight hours. It skips without both secrets,
+and its timer only runs after the workflow is merged into the repository's
+default branch. Apply the updated cloud/schema.sql before running it. Do not
+enable it against an empty/unverified database; migrate and reconcile the
+local SQLite archive first.
