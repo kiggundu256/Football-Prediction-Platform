@@ -163,7 +163,7 @@ class HistoricalDatabase:
             rows = db.execute("""
                 SELECT payload_json FROM historical_matches
                 WHERE (home_team = ? OR away_team = ?)
-                  AND match_date < ?
+                  AND match_date >= '2020-01-01' AND match_date < ?
                   AND status IN ('FT','AET','PEN')
                   AND home_goals IS NOT NULL AND away_goals IS NOT NULL
                 ORDER BY COALESCE(json_extract(payload_json, '$.fixture.date'), match_date) DESC, fixture_id DESC LIMIT ?
@@ -174,7 +174,7 @@ class HistoricalDatabase:
                 # imported team names are available.
                 rows = db.execute("""
                     SELECT payload_json FROM historical_matches
-                    WHERE match_date < ?
+                    WHERE match_date >= '2020-01-01' AND match_date < ?
                       AND status IN ('FT','AET','PEN')
                       AND home_goals IS NOT NULL AND away_goals IS NOT NULL
                     ORDER BY COALESCE(json_extract(payload_json, '$.fixture.date'), match_date) DESC, fixture_id DESC
@@ -207,7 +207,7 @@ class HistoricalDatabase:
                 SELECT payload_json FROM historical_matches
                 WHERE ((home_team = ? AND away_team = ?) OR
                        (home_team = ? AND away_team = ?))
-                  AND match_date < ? AND status IN ('FT','AET','PEN')
+                  AND match_date >= '2020-01-01' AND match_date < ? AND status IN ('FT','AET','PEN')
                   AND home_goals IS NOT NULL AND away_goals IS NOT NULL
                 ORDER BY match_date DESC, fixture_id DESC LIMIT ?
             """, (str(home_team), str(away_team), str(away_team), str(home_team),
@@ -215,7 +215,7 @@ class HistoricalDatabase:
             if not rows:
                 rows = db.execute("""
                     SELECT payload_json FROM historical_matches
-                    WHERE match_date < ? AND status IN ('FT','AET','PEN')
+                    WHERE match_date >= '2020-01-01' AND match_date < ? AND status IN ('FT','AET','PEN')
                       AND home_goals IS NOT NULL AND away_goals IS NOT NULL
                     ORDER BY match_date DESC, fixture_id DESC
                 """, (before_date,)).fetchall()
@@ -276,7 +276,7 @@ class HistoricalDatabase:
                            (r.team_name <> '' AND
                             (h.home_team = r.team_name OR h.away_team = r.team_name))
                       )
-                    WHERE h.match_date < r.before_date
+                    WHERE h.match_date >= '2020-01-01' AND h.match_date < r.before_date
                       AND h.status IN ('FT','AET','PEN')
                       AND h.home_goals IS NOT NULL AND h.away_goals IS NOT NULL
                 )
@@ -310,7 +310,7 @@ class HistoricalDatabase:
             rows = db.execute("""
                 SELECT payload_json FROM historical_matches
                 WHERE (home_team_id=? OR away_team_id=?)
-                  AND match_date < ?
+                  AND match_date >= '2020-01-01' AND match_date < ?
                   AND status IN ('FT','AET','PEN')
                   AND home_goals IS NOT NULL AND away_goals IS NOT NULL
                 ORDER BY COALESCE(json_extract(payload_json, '$.fixture.date'), match_date) DESC, fixture_id DESC LIMIT ?
@@ -325,7 +325,7 @@ class HistoricalDatabase:
                 SELECT payload_json FROM historical_matches
                 WHERE ((home_team_id=? AND away_team_id=?) OR
                        (home_team_id=? AND away_team_id=?))
-                  AND match_date < ? AND status IN ('FT','AET','PEN')
+                  AND match_date >= '2020-01-01' AND match_date < ? AND status IN ('FT','AET','PEN')
                   AND home_goals IS NOT NULL AND away_goals IS NOT NULL
                 ORDER BY match_date DESC, fixture_id DESC LIMIT ?
             """, (int(home_team_id), int(away_team_id), int(away_team_id),
