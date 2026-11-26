@@ -15,6 +15,9 @@
 - Added a repeatable SQLite-to-PostgreSQL migration utility. It uses stable fixture IDs, batch upserts, preserves JSON fields, checks destination counts, and never writes to the SQLite source.
 - Documented the free-first target architecture and migration guardrails.
 
+- Removed an unintended 2026-only cutoff from all three team-history lookup paths (ID, name fallback, and batched lookup). Forecasts now use the available archive strictly before kickoff, including 2020+ rows.
+- Added regression tests covering older-season inclusion and exclusion of same-day/future matches. These tests are included in the existing unittest discovery suite; execution status is pending a confirmed GitHub Actions run.
+
 ## Still gated
 
 - Provisioning Supabase/hosting requires the user's provider account authorization and secrets.
