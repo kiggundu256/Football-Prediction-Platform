@@ -16,7 +16,6 @@ on:
       - "tests/**"
       - ".github/workflows/cloud-foundation.yml"
       - ".github/workflows/cloud-scheduled-scan.yml"
-      - ".github/workflows/cloud-scheduled-scan.yml"
   push:
     branches: [cloud-migration]
     paths:
@@ -55,6 +54,11 @@ jobs:
         run: |
           python -m py_compile scripts/migrate_sqlite_to_postgres.py
           python -m py_compile intelligent_scanner.py cloud/postgres_historical_database.py cloud/scheduled_scan.py cloud/qt_compat.py
+      - name: Verify scanner imports without the desktop Qt runtime
+        run: |
+          python -m venv .venv-cloud
+          .venv-cloud/bin/python -m pip install -r cloud/requirements.txt
+          PYTHONPATH=. .venv-cloud/bin/python -c "from intelligent_scanner import IntelligentScannerWorker; from cloud.postgres_historical_database import PostgresHistoricalDatabase; print('Headless scanner imports successfully.')"
       - name: Validate schema invariants
         run: |
           python - <<'PY'
