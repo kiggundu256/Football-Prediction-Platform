@@ -1,0 +1,48 @@
+name: Keep latest Actions artifacts
+
+on:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: ["Windows desktop build"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  prune-old-artifacts:
+    if: github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Keep only the newest artifact of each name
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const artifacts = await github.paginate(
+              github.rest.actions.listArtifactsForRepo,
+              { owner: context.repo.owner, repo: context.repo.repo, per_page: 100 }
+            );
+
+            const byName = new Map();
+            for (const artifact of artifacts.filter(item => !item.expired)) {
+              const current = byName.get(artifact.name);
+              if (!current || new Date(artifact.created_at) > new Date(current.created_at)) {
+                byName.set(artifact.name, artifact);
+              }
+            }
+
+            const keepIds = new Set([...byName.values()].map(item => item.id));
+            const obsolete = artifacts.filter(item => !item.expired && !keepIds.has(item.id));
+
+            core.info(`Found ${artifacts.length} artifacts; keeping ${keepIds.size} newest artifact(s), deleting ${obsolete.length} older artifact(s).`);
+            for (const artifact of obsolete) {
+              core.info(`Deleting ${artifact.name} (id ${artifact.id}, created ${artifact.created_at}, ${artifact.size_in_bytes} bytes)`);
+              await github.rest.actions.deleteArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: artifact.id
+              });
+            }
