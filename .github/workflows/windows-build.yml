@@ -1,4 +1,4 @@
-name: Windows desktop build
+name: Windows desktop build validation
 
 on:
   push:
@@ -25,13 +25,5 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
       - name: Run tests
         run: python -m unittest discover -s tests -v
-      - name: Build Windows executable
+      - name: Build Windows executable for validation (not uploaded)
         run: python -m PyInstaller --noconfirm --clean --windowed --onefile --collect-all keyring --hidden-import keyring.backends.Windows --name FootballPredictionPlatform --add-data "Data/OpenFootball_2022_2026;Data/OpenFootball_2022_2026" app.py
-      - name: Upload Windows app
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: FootballPredictionPlatform-Windows
-          path: dist/FootballPredictionPlatform.exe
-          if-no-files-found: error
-          retention-days: 7
